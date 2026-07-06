@@ -1,0 +1,15 @@
+# Render Blueprint — https://render.com/docs/blueprint-spec
+# Connect repo: https://github.com/Sushant-Sharma96/extractor-builder
+services:
+  - type: web
+    name: extractor-builder
+    runtime: node
+    plan: starter
+    buildCommand: npm install && npx puppeteer browsers install chrome && npm run build
+    startCommand: npm start
+    healthCheckPath: /api/health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: 10000
