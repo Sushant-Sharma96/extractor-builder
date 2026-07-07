@@ -136,12 +136,16 @@ function extractModel() {
         pushClass(simple.token, { order, media: media || null, states: simple.states, pseudoEl: simple.pseudoEl, css });
         continue;
       }
-      // type / universal selectors (preflight, shadcn base, universal --tw init)
-      if (/^[a-zA-Z*]/.test(sel) || sel.startsWith('::') || sel.startsWith(':where(') || sel.startsWith(':is(')) {
+      // A selector is "base" (global type/universal/pseudo) ONLY if it references
+      // no class. If it references ANY class — :where(.space-y-4 > *), .a .b,
+      // group-hover, etc. — it must be translated to the semantic classes, so it
+      // goes to complexRules. (Routing class-bearing selectors to base was the
+      // bug that dropped space-y / divide / :where spacing.)
+      const referencesClass = /\.[_a-zA-Z\\]/.test(sel);
+      if (!referencesClass) {
         model.baseRules.push({ selector: sel, css, media: media || null });
         continue;
       }
-      // combinators: group-hover / peer / dark descendant / data-state → approximated
       model.complexRules.push({ kind: selectorKind(sel), selectorText: sel, media: media || null, css });
     }
     order++;
@@ -353,6 +357,49 @@ async function captureSite(url, { viewportWidth = 1280 } = {}) {
       }
       await sleep(150);
 
+      // TABS: a row of >=2 sibling buttons with short labels that swap a content
+      // panel (React renders only the active one). Click through each, STASH the
+      // panel content, tag triggers+panels so script.js can switch them.
+      const tabGroups = Array.from(document.querySelectorAll('div, nav, ul, [role="tablist"]')).filter((g) => {
+        const btns = Array.from(g.children).filter((c) => c.tagName === 'BUTTON' || c.getAttribute('role') === 'tab');
+        if (btns.length < 2) return false;
+        if (!btns.every((b) => { const t = (b.textContent || '').trim(); return t && t.length <= 24; })) return false;
+        return !!g.nextElementSibling; // needs a panel region after it
+      });
+      for (const g of tabGroups) {
+        try {
+          const btns = Array.from(g.children).filter((c) => c.tagName === 'BUTTON' || c.getAttribute('role') === 'tab');
+          const stashed = [];
+          for (let i = 0; i < btns.length; i++) {
+            btns[i].click(); await sleep(160);
+            const cur = g.nextElementSibling;
+            if (cur && !cur.hasAttribute('data-tab-panel')) {
+              const c = cur.cloneNode(true);
+              c.setAttribute('data-tab-panel', String(i));
+              if (i > 0) c.setAttribute('hidden', '');
+              c.removeAttribute('data-sx'); c.querySelectorAll('[data-sx]').forEach((e) => e.removeAttribute('data-sx'));
+              stashed.push(c);
+            }
+          }
+          // Only real tabs if the panel CONTENT actually changes between tabs
+          // (a CTA button pair leaves the following block unchanged → not tabs).
+          const sigs = stashed.map((c) => (c.textContent || '').replace(/\s+/g, '').trim());
+          const changes = new Set(sigs).size > 1;
+          if (stashed.length >= 2 && changes) {
+            btns.forEach((b, i) => b.setAttribute('data-tab', String(i)));
+            g.setAttribute('data-tabs', '');
+            const anchor = g.nextElementSibling;
+            stashed.forEach((c) => anchor.parentNode.insertBefore(c, anchor));
+            anchor.remove(); // drop the live (duplicate) panel; stashed ones remain
+            btns[0].click(); await sleep(40);
+          }
+        } catch { /* ignore */ }
+      }
+
+      // (Consent/cookie banner tagging is done in build.js, which tags an inner
+      // container that survives the semantic rewrite — a top-level <section>
+      // would lose the attribute during section emission.)
+
       // Close any modal/dialog left open (incl. auto-open-on-load) so the
       // captured page isn't blocked. Hide (not remove) to preserve content.
       try { document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); } catch {}
@@ -381,16 +428,39 @@ async function captureSite(url, { viewportWidth = 1280 } = {}) {
       });
       await sleep(60);
 
-      // Restore fade/slide reveal "from" states (opacity/transform) that the
-      // scroll animated to their final visible values — so build.js can mark
-      // them data-reveal and script.js re-animates them. Progress-bar widths and
-      // count-up numbers keep their FINAL values (we don't touch those).
       if (window.__revealFrom) {
+        // Progress bars / vertical bars are view-triggered (and can reset when
+        // scrolled away), so a single scroll-through misses their final size.
+        // Read each one WHILE in view, then apply the final as a percentage at
+        // the very end so the site's JS can't reset it before capture.
+        const whEls = [...window.__revealFrom.keys()].filter((el) => /(^|;)\s*(width|height):\s*0/.test(window.__revealFrom.get(el) || '') && el.isConnected);
+        const finals = [];
+        for (const el of whEls) {
+          try {
+            el.scrollIntoView({ block: 'center' }); await sleep(550);
+            const cs = getComputedStyle(el); const p = el.parentElement; const from = window.__revealFrom.get(el);
+            const w = (p && p.clientWidth) ? (parseFloat(cs.width) / p.clientWidth * 100) : null;
+            const h = (p && p.clientHeight) ? (parseFloat(cs.height) / p.clientHeight * 100) : null;
+            finals.push({ el, from, w, wpx: cs.width, h, hpx: cs.height });
+          } catch { /* ignore */ }
+        }
+        window.scrollTo(0, 0); await sleep(150);
+        finals.forEach((f) => {
+          try {
+            if (/(^|;)\s*width:\s*0/.test(f.from) && f.wpx !== '0px') f.el.style.width = (f.w != null ? f.w.toFixed(2) + '%' : f.wpx);
+            if (/(^|;)\s*height:\s*0/.test(f.from) && f.hpx !== '0px') f.el.style.height = (f.h != null ? f.h.toFixed(2) + '%' : f.hpx);
+          } catch { /* ignore */ }
+        });
+
+        // Record opacity/transform reveals as data-from so script.js replays them
+        // from that state to their natural end (opacity:1 / transform:none).
         window.__revealFrom.forEach((from, el) => {
           try {
-            const tm = (from.match(/transform:\s*([^;]+)/) || [])[1];
-            if (/opacity:\s*0(\D|$)/.test(from)) el.style.opacity = '0';
-            if (tm && /(translate|scale|rotate)/.test(tm)) el.style.transform = tm.trim();
+            const parts = [];
+            const grab = (re) => { const m = from.match(re); if (m) parts.push(m[0].replace(/;$/, '')); };
+            grab(/opacity:\s*0(?:\.\d+)?/);
+            grab(/transform:\s*(?!none)[^;]+/);
+            if (parts.length) el.setAttribute('data-from', parts.join('; '));
           } catch { /* ignore */ }
         });
       }

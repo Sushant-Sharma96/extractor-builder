@@ -4,6 +4,7 @@
   "description": "stripmine — paste a Lovable URL, get a self-contained static site (HTML + CSS + JS + assets).",
   "type": "commonjs",
   "scripts": {
+    "predev": "node scripts/kill-dev-ports.js",
     "dev": "concurrently -n api,web -c blue,magenta \"nodemon server/index.js\" \"vite --config client/vite.config.js\"",
     "dev:api": "nodemon server/index.js",
     "dev:web": "vite --config client/vite.config.js",

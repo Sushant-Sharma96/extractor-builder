@@ -229,12 +229,60 @@ function build(model) {
   const baseUrl = model.url || 'https://localhost/';
   const absUrl = (u) => { if (!u) return u; try { return new URL(u, baseUrl).href; } catch { return u; } };
 
+  // Tag the consent/cookie banner so script.js can dismiss it (independent of
+  // renamed classes). Anchor on an Accept/Decline button, walk up to the
+  // container that also holds the cookie text, and tag that.
+  if (!$('[data-dismiss-banner]').length) {
+    $('button, a[role="button"]').each((_, b) => {
+      const $b = $(b);
+      if (!/^(accept|decline|reject|agree|got it|allow|dismiss|ok(ay)?)\b/i.test(($b.text() || '').trim())) return undefined;
+      let $a = $b.parent();
+      for (let i = 0; i < 8 && $a.length && $a.get(0) && $a.get(0).tagName !== 'body'; i++) {
+        const t = $a.text() || '';
+        if (/we use cookies|cookie policy|consent|we value your privacy|cookie preferences/i.test(t) && t.length < 700) {
+          $a.attr('data-dismiss-banner', '');
+          return false;
+        }
+        $a = $a.parent();
+      }
+      return undefined;
+    });
+  }
+
   const classRules = model.classRules || {};
   const complexRules = model.complexRules || [];
   // Every class token that appears in a combinator rule (space-y, divide, group,
   // group-hover:*, peer-*, data-state targets, descendant rules).
   const comboTokenSet = new Set();
   for (const r of complexRules) for (const t of extractClassTokens(r.selectorText)) comboTokenSet.add(t);
+
+  // ZERO-LOSS GUARD: figure out which combinator rules we can't fully translate
+  // to semantic classes (a referenced class isn't on any normal element). For
+  // those, we keep the ORIGINAL classes on the affected elements and emit the
+  // rule verbatim — so no style is ever silently dropped, even for selector
+  // shapes we've never seen.
+  const LITERAL_MARKERS = new Set(['group', 'peer']);
+  const nonSvgTokens = new Set();
+  const allElementTokens = new Set();
+  $('[class]').each((_, el) => {
+    const inSvg = $(el).closest('svg').length > 0;
+    ($(el).attr('class') || '').split(/\s+/).filter(Boolean).forEach((t) => {
+      allElementTokens.add(t);
+      if (!inSvg) nonSvgTokens.add(t);
+    });
+  });
+  const failedRuleIdx = new Set(); // untranslatable but references a real element → emit verbatim
+  const skipRuleIdx = new Set();   // references no element at all → dead rule → skip (lossless)
+  const keepLiteralTokens = new Set();
+  complexRules.forEach((r, i) => {
+    const toks = extractClassTokens(r.selectorText);
+    const nonLit = toks.filter((t) => !LITERAL_MARKERS.has(t));
+    const translatable = nonLit.length > 0 && nonLit.every((t) => nonSvgTokens.has(t));
+    if (translatable) return;
+    const onEl = toks.filter((t) => allElementTokens.has(t));
+    if (onEl.length) { failedRuleIdx.add(i); onEl.forEach((t) => keepLiteralTokens.add(t)); }
+    else skipRuleIdx.add(i);
+  });
 
   const sigToName = new Map();
   const nameToBuckets = new Map();
@@ -286,9 +334,24 @@ function build(model) {
     const $el = $(el);
 
     if (tag === 'svg') {
+      // Give the <svg> a semantic class so its size (h-4 w-4) and color
+      // (text-emerald -> currentColor) survive. Keep inner markup + inline
+      // styles + data-from (animated chart dots) on descendants.
+      const svgClassList = classListOf($el);
+      const svgBuckets = resolveElementStyle(svgClassList, classRules);
+      const svgCombo = comboTokensOf(svgClassList);
+      const svgCls = (isEmptyBuckets(svgBuckets) && !svgCombo.length) ? null : classFor(el, svgBuckets, section, svgClassList);
+      if (svgCls && !usedNameOrder.includes(svgCls)) usedNameOrder.push(svgCls);
       const $c = $el.clone();
-      $c.find('[class]').removeAttr('class');
+      $c.find('[data-sx]').removeAttr('data-sx');
+      $c.removeAttr('data-sx');
+      // strip descendant classes, but keep ones an untranslatable rule needs
+      $c.find('[class]').each((_, d) => {
+        const kept = ($(d).attr('class') || '').split(/\s+/).filter((t) => keepLiteralTokens.has(t));
+        if (kept.length) $(d).attr('class', kept.join(' ')); else $(d).removeAttr('class');
+      });
       $c.removeAttr('class');
+      if (svgCls) $c.attr('class', svgCls);
       return $.html($c);
     }
 
@@ -308,33 +371,35 @@ function build(model) {
       return `<img${attrs}>`;
     }
 
-    // Inline styles carry REAL rendered values (progress-bar widths, chart bar
-    // heights, positions, transforms, CSS vars) — keep them. Only opacity:0 (a
-    // JS scroll-reveal "from" state) gets special handling via data-reveal.
+    // Inline styles carry REAL final rendered values (progress-bar widths, chart
+    // positions, transforms, CSS vars) — keep them. data-from (set at capture)
+    // carries the animation start state so script.js can replay the animation.
     const inlineStyle = ($el.attr('style') || '').replace(/"/g, "'").replace(/\s+/g, ' ').trim();
-    const resolvedOpacity0 = buckets[BASE_KEY] && buckets[BASE_KEY].map.get('opacity') === '0';
-    const isReveal = /opacity:\s*0(\D|$)/.test(inlineStyle) || resolvedOpacity0;
+    const dataFrom = ($el.attr('data-from') || '').replace(/"/g, "'").trim();
+    const isReveal = !!dataFrom;
 
     const children = $el.contents().toArray();
     const inner = children.map((c) => walk(c, section)).filter(Boolean).join('');
 
     // drop unstyled wrapper divs/spans with a single child, no direct text, no
-    // inline styling (keeping ones that carry inline styles — e.g. bar fills)
-    if ((tag === 'div' || tag === 'span') && !cls && !inlineStyle) {
+    // inline styling (keeping ones that carry inline styles or animation state)
+    if ((tag === 'div' || tag === 'span') && !cls && !inlineStyle && !dataFrom) {
       const elemKids = children.filter((c) => c.tagName).length;
       const directText = $el.clone().children().remove().end().text().trim();
       if (elemKids <= 1 && !directText) return inner;
     }
 
     // Keep group/peer as literal markers so group-hover:/peer- combinator rules
-    // (which reference an ancestor .group / .peer) still match.
+    // still match. Also keep any original class an untranslatable rule needs
+    // (zero-loss guard) so its verbatim rule still applies to this element.
     const markers = [];
     if (classList.includes('group')) markers.push('group');
     if (classList.includes('peer')) markers.push('peer');
+    for (const t of classList) if (keepLiteralTokens.has(t) && !markers.includes(t)) markers.push(t);
     const fullCls = [cls, ...markers].filter(Boolean).join(' ');
     const clsAttr = fullCls ? ` class="${fullCls}"` : '';
     const keep = [];
-    if (isReveal) keep.push(' data-reveal');
+    if (isReveal) { keep.push(' data-reveal'); keep.push(` data-from="${dataFrom}"`); }
     if (inlineStyle) keep.push(` style="${inlineStyle}"`);
     if (tag === 'a' && $el.attr('href')) keep.push(` href="${$el.attr('href')}"`);
     // Preserve accessibility + widget-state attributes so the interactivity
@@ -344,6 +409,8 @@ function build(model) {
       'aria-label', 'aria-hidden', 'aria-expanded', 'aria-controls', 'aria-selected',
       'aria-current', 'aria-labelledby', 'aria-describedby', 'hidden',
       'data-state', 'data-orientation', 'data-value', 'data-acc-trigger', 'data-acc-panel',
+      'data-tabs', 'data-tab', 'data-tab-panel', 'data-dismiss-banner',
+      'viewBox', 'fill', 'stroke', 'stroke-width', 'points', 'd', 'cx', 'cy', 'r', 'x', 'y', 'x1', 'x2', 'y1', 'y2',
     ];
     for (const a of KEEP_ATTRS) {
       const v = $el.attr(a);
@@ -375,7 +442,7 @@ function build(model) {
     bodyBlocks.push(`  <!-- Section: ${label} -->\n  <${semTag} class="${sectionCls}">\n${indent(inner, 4)}\n  </${semTag}>`);
   });
 
-  const css = buildCss(model, { nameToBuckets, nameSections, sectionOrder, usedNameOrder, complexRules, tokenToNames });
+  const css = buildCss(model, { nameToBuckets, nameSections, sectionOrder, usedNameOrder, complexRules, tokenToNames, failedRuleIdx, skipRuleIdx });
   const html = buildHtml(model, bodyBlocks.join('\n\n'));
   const js = buildScript();
   const summary = [...new Set(sectionOrder.map((s) => s.label))].join(', ');
@@ -410,38 +477,47 @@ ${body}
 // data-state / descendant) onto the generated semantic classes, so their
 // declarations are never lost. Each .token in the selector is rewritten to the
 // semantic class(es) of elements that had that token; group/peer stay literal.
-function emitCombinatorRules(complexRules, tokenToNames) {
+function emitCombinatorRules(complexRules, tokenToNames, failedRuleIdx, skipRuleIdx) {
   const flat = [], media = {};
   const LITERAL = new Set(['group', 'peer']);
-  for (const r of complexRules) {
+  failedRuleIdx = failedRuleIdx || new Set();
+  skipRuleIdx = skipRuleIdx || new Set();
+  let translated = 0, verbatim = 0;
+  const push = (sel, body, mq) => {
+    const rule = `${sel} {\n${body}\n}`;
+    if (mq) (media[mq] || (media[mq] = [])).push(rule); else flat.push(rule);
+  };
+  complexRules.forEach((r, i) => {
+    if (skipRuleIdx.has(i)) return; // dead rule (matches no element) — lossless to drop
+    const body = splitDeclarations(r.css).map(([p, v]) => `  ${p}: ${v};`).join('\n');
+    if (!body.trim()) return;
+    // Zero-loss fallback: rules we couldn't map are emitted verbatim (their
+    // original classes are kept on the elements by the guard in build()).
+    if (failedRuleIdx.has(i)) { push(r.selectorText, body, r.media); verbatim++; return; }
     const tokens = [...new Set(extractClassTokens(r.selectorText))];
-    if (!tokens.length) continue;
+    if (!tokens.length) return;
     let selectors = [r.selectorText];
     let ok = true;
     for (const tok of tokens) {
       if (LITERAL.has(tok)) continue; // keep .group / .peer literal
       const names = tokenToNames.get(tok);
-      if (!names || !names.size) { ok = false; break; } // token not on any kept element
+      if (!names || !names.size) { ok = false; break; }
       const nameArr = [...names].slice(0, 6);
       const needle = '.' + escapeIdent(tok);
       const next = [];
       for (const sel of selectors) for (const nm of nameArr) next.push(sel.split(needle).join('.' + nm));
       selectors = next.slice(0, 24);
     }
-    if (!ok) continue;
-    const body = splitDeclarations(r.css).map(([p, v]) => `  ${p}: ${v};`).join('\n');
-    if (!body.trim()) continue;
-    for (const sel of selectors) {
-      const rule = `${sel} {\n${body}\n}`;
-      if (r.media) (media[r.media] || (media[r.media] = [])).push(rule); else flat.push(rule);
-    }
-  }
+    if (!ok) { push(r.selectorText, body, r.media); verbatim++; return; } // safety net
+    for (const sel of selectors) push(sel, body, r.media);
+    translated++;
+  });
   const chunks = [...new Set(flat)];
   for (const mq of Object.keys(media)) chunks.push(`@media ${mq} {\n` + [...new Set(media[mq])].map((x) => x.replace(/^/gm, '  ')).join('\n') + `\n}`);
-  return chunks.join('\n\n');
+  return { css: chunks.join('\n\n'), translated, verbatim };
 }
 
-function buildCss(model, { nameToBuckets, nameSections, sectionOrder, usedNameOrder, complexRules, tokenToNames }) {
+function buildCss(model, { nameToBuckets, nameSections, sectionOrder, usedNameOrder, complexRules, tokenToNames, failedRuleIdx, skipRuleIdx }) {
   const parts = [];
   parts.push(`/* styles.css — generated from the site's own compiled CSS */`);
 
@@ -463,12 +539,10 @@ function buildCss(model, { nameToBuckets, nameSections, sectionOrder, usedNameOr
   // closed dialogs rely on this).
   parts.push(`/* --- hidden --- */\n[hidden] { display: none !important; }`);
 
-  // Scroll-reveal: elements keep their inline "from" state; script.js adds
-  // .reveal-in to transition them to natural when they enter the viewport.
-  parts.push(`/* --- scroll reveal --- */
-[data-reveal] { will-change: opacity, transform; transition: opacity 0.7s cubic-bezier(0.16,1,0.3,1), transform 0.7s cubic-bezier(0.16,1,0.3,1); }
-[data-reveal].reveal-in { opacity: 1 !important; transform: none !important; }
-@media (prefers-reduced-motion: reduce) { [data-reveal] { transition: none; opacity: 1 !important; transform: none !important; } }`);
+  // Scroll-reveal: elements render at their FINAL state by default (visible,
+  // correct); script.js applies the data-from start state and animates to final
+  // on scroll. Only a perf hint is needed here.
+  parts.push(`/* --- scroll reveal --- */\n[data-reveal] { will-change: opacity, transform; }`);
 
   if (model.keyframes && model.keyframes.length) parts.push(`/* --- keyframes --- */\n${model.keyframes.join('\n')}`);
   if (model.fontFaces && model.fontFaces.length) parts.push(`/* --- @font-face --- */\n${model.fontFaces.join('\n')}`);
@@ -494,8 +568,9 @@ function buildCss(model, { nameToBuckets, nameSections, sectionOrder, usedNameOr
   // Combinator/interaction rules (space-y, divide, group-hover, peer, data-state)
   // re-scoped onto the semantic classes — completes the gather so nothing drops.
   if (complexRules && complexRules.length) {
-    const combo = emitCombinatorRules(complexRules, tokenToNames || new Map());
-    if (combo.trim()) parts.push(`/* ===== Spacing & interaction (combinators) ===== */\n${combo}`);
+    const combo = emitCombinatorRules(complexRules, tokenToNames || new Map(), failedRuleIdx, skipRuleIdx);
+    if (combo.css.trim()) parts.push(`/* ===== Spacing & interaction (combinators) ===== */\n${combo.css}`);
+    console.log(`[build] combinator rules: ${combo.translated} translated, ${combo.verbatim} verbatim (zero-loss), ${(skipRuleIdx || new Set()).size} dead-skipped`);
   }
   return parts.join('\n\n') + '\n';
 }
@@ -566,30 +641,88 @@ function buildScript() {
     });
   });
 
-  // Scroll-reveal: animate [data-reveal] elements to their natural state as they
-  // enter the viewport (reconstructs the site's JS-driven reveal animations).
+  // Tabs: captured tab groups swap their stashed [data-tab-panel] siblings.
+  document.querySelectorAll('[data-tabs]').forEach(function (group) {
+    var tabs = Array.prototype.slice.call(group.querySelectorAll('[data-tab]'));
+    function panels() { var out = [], n = group.nextElementSibling; while (n) { if (n.hasAttribute('data-tab-panel')) out.push(n); n = n.nextElementSibling; } return out; }
+    var ps = panels();
+    tabs.forEach(function (t) {
+      t.addEventListener('click', function () {
+        var idx = t.getAttribute('data-tab');
+        ps.forEach(function (p) { var m = p.getAttribute('data-tab-panel') === idx; if (m) { p.hidden = false; p.removeAttribute('hidden'); } else { p.hidden = true; } });
+        tabs.forEach(function (x) { x.setAttribute('data-state', x === t ? 'active' : 'inactive'); });
+      });
+    });
+  });
+
+  // Consent/cookie banners: any button inside a tagged banner dismisses it.
+  document.querySelectorAll('[data-dismiss-banner]').forEach(function (banner) {
+    banner.addEventListener('click', function (e) {
+      if (e.target.closest && e.target.closest('button, a[role="button"], [data-close]')) { banner.setAttribute('hidden', ''); }
+    });
+  });
+
+  // Scroll-reveal: replay each element's captured animation from its data-from
+  // state to its final (opacity/slide/scale reveals, progress-bar widths, chart
+  // dots) as it enters the viewport. Elements render at FINAL without JS.
   (function () {
-    var els = Array.prototype.slice.call(document.querySelectorAll('[data-reveal]'));
+    var els = Array.prototype.slice.call(document.querySelectorAll('[data-from]'));
     if (!els.length) return;
-    if (!('IntersectionObserver' in window)) { els.forEach(function (el) { el.classList.add('reveal-in'); }); return; }
+    function parse(s) {
+      var o = {};
+      (s || '').split(';').forEach(function (d) { var i = d.indexOf(':'); if (i > 0) o[d.slice(0, i).trim()] = d.slice(i + 1).trim(); });
+      return o;
+    }
+    var reduce = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    if (reduce || !('IntersectionObserver' in window)) return; // leave at final
+    els.forEach(function (el) {
+      el.__from = parse(el.getAttribute('data-from')); // opacity/transform start state
+      el.style.transition = 'none';
+      Object.keys(el.__from).forEach(function (p) { el.style.setProperty(p, el.__from[p]); });
+    });
+    void document.body.offsetWidth; // flush start state before observing
     var io = new IntersectionObserver(function (entries) {
       entries.forEach(function (e) {
-        if (e.isIntersecting) { e.target.classList.add('reveal-in'); io.unobserve(e.target); }
+        if (!e.isIntersecting) return;
+        var el = e.target;
+        el.style.transition = 'opacity .7s cubic-bezier(.16,1,.3,1), transform .7s cubic-bezier(.16,1,.3,1)';
+        Object.keys(el.__from).forEach(function (p) { el.style.removeProperty(p); }); // -> natural (opacity 1 / transform none)
+        io.unobserve(el);
       });
     }, { rootMargin: '0px 0px -8% 0px', threshold: 0.05 });
     els.forEach(function (el) { io.observe(el); });
   })();
 
-  // Modal/dialog close: X buttons, [data-close], backdrop, and Escape.
+  // Dismissable overlays: modals/dialogs AND cookie/consent banners.
+  function hideEl(el) { if (el) { el.setAttribute('hidden', ''); el.setAttribute('data-state', 'closed'); } }
   function closeDialogs() {
-    document.querySelectorAll('[role="dialog"], [aria-modal="true"], .modal, [data-state="open"][class*="dialog" i]').forEach(function (d) {
-      d.setAttribute('hidden', ''); d.setAttribute('data-state', 'closed');
-    });
-    document.querySelectorAll('[data-overlay], [class*="overlay" i][class*="fixed" i]').forEach(function (o) { o.setAttribute('hidden', ''); });
+    document.querySelectorAll('[role="dialog"], [aria-modal="true"], .modal, [data-state="open"][class*="dialog" i]').forEach(hideEl);
+    document.querySelectorAll('[data-overlay], [class*="overlay" i], [class*="backdrop" i]').forEach(hideEl);
+  }
+  // Find the dismissable container (banner/modal/overlay) an element sits in.
+  function overlayContainer(el) {
+    var n = el;
+    while (n && n !== document.body) {
+      var cs = getComputedStyle(n);
+      if ((cs.position === 'fixed' || cs.position === 'sticky')
+        && (n.getAttribute('role') === 'dialog' || /cookie|consent|banner|modal|dialog|overlay|toast|popup/i.test(n.className || ''))) return n;
+      n = n.parentElement;
+    }
+    // fall back to the nearest fixed ancestor
+    n = el;
+    while (n && n !== document.body) { if (getComputedStyle(n).position === 'fixed') return n; n = n.parentElement; }
+    return null;
   }
   document.addEventListener('click', function (e) {
-    var t = e.target.closest && e.target.closest('[aria-label="Close" i], [data-close], button[class*="close" i]');
-    if (t) { closeDialogs(); }
+    var el = e.target;
+    // explicit close controls
+    var closeBtn = el.closest && el.closest('[aria-label="Close" i], [aria-label="close" i], [data-close], button[class*="close" i]');
+    if (closeBtn) { var c = overlayContainer(closeBtn); if (c) hideEl(c); else closeDialogs(); return; }
+    // cookie/consent buttons (Accept / Decline / Got it / Agree / Reject / OK)
+    var btn = el.closest && el.closest('button, a[role="button"]');
+    if (btn && /^(accept|decline|reject|agree|got it|allow|dismiss|ok(ay)?|i understand|continue)\b/i.test((btn.textContent || '').trim())) {
+      var cont = overlayContainer(btn); if (cont) hideEl(cont); return;
+    }
   });
   document.addEventListener('keydown', function (e) { if (e.key === 'Escape') closeDialogs(); });
 })();
