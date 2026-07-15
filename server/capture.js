@@ -121,8 +121,14 @@ function extractModel() {
     if (!css) return;
     const selectors = splitSelectorList(rule.selectorText);
     for (const sel of selectors) {
-      // :root / html custom-property blocks → tokens
-      if (sel === ':root' || sel === 'html' || sel === ':where(html)' || sel === 'html:root') {
+      // :root / html / :host custom-property blocks → tokens. :host is included
+      // because Tailwind v4 emits its @theme defaults there, often with
+      // self-references (--font-sans: var(--font-sans)); routing them here means
+      // they get self-ref-resolved and MERGED into the one variables block. If
+      // left as a base rule they'd later be scoped to .et-scope and clobber the
+      // real values with empty ones (root cause of the lost-typography bug).
+      if (sel === ':root' || sel === 'html' || sel === ':where(html)' || sel === 'html:root'
+        || sel === ':host' || sel === ':where(:host)' || sel === ':host:root') {
         if (/--/.test(css)) model.rootCss += (model.rootCss ? '\n' : '') + css;
         else model.baseRules.push({ selector: sel, css });
         continue;
@@ -217,6 +223,34 @@ function extractModel() {
   }
   probe.remove();
 
+  // Resolve broken custom properties in :root. Tailwind v4 theme indirections
+  // can emit self-references like `--font-mono: var(--font-mono)` which are
+  // guaranteed-invalid at computed-value time — the declared value renders as
+  // nothing, silently killing the font/shadow. Replace each pure self-ref (or
+  // empty value) with the browser's COMPUTED value; if that's also empty, use a
+  // sane fallback for font-* families and drop other broken indirections.
+  if (model.rootCss) {
+    const rootCS = getComputedStyle(document.documentElement);
+    const FONT_FALLBACK = {
+      '--font-mono': 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace',
+      '--font-sans': 'ui-sans-serif, system-ui, sans-serif, "Apple Color Emoji", "Segoe UI Emoji"',
+      '--font-serif': 'ui-serif, Georgia, Cambria, "Times New Roman", serif',
+      '--font-display': 'ui-sans-serif, system-ui, sans-serif',
+    };
+    const esc = (s) => s.replace(/[-]/g, '\\-');
+    const rebuilt = splitDeclsLocal(model.rootCss).map(([p, v]) => {
+      const val = String(v).trim();
+      const pureSelfRef = new RegExp('^var\\(\\s*' + esc(p) + '\\s*\\)$').test(val);
+      if (!pureSelfRef && val !== '') return `${p}: ${v}`;
+      let cv = rootCS.getPropertyValue(p).trim();
+      // computed of a self-referential prop is empty; only trust a real value.
+      if (cv && !new RegExp('var\\(\\s*' + esc(p)).test(cv)) return `${p}: ${cv}`;
+      if (FONT_FALLBACK[p]) return `${p}: ${FONT_FALLBACK[p]}`;
+      return null; // drop broken non-font indirection (e.g. --shadow-glow)
+    }).filter(Boolean);
+    model.rootCss = rebuilt.join(';\n') + ';';
+  }
+
   // Font <link>s (Google Fonts etc.) to preserve typography.
   document.querySelectorAll('link[rel="stylesheet"],link[rel="preload"][as="font"]').forEach((l) => {
     const href = l.href || l.getAttribute('href') || '';
@@ -246,12 +280,53 @@ async function captureSite(url, { viewportWidth = 1280 } = {}) {
   const puppeteer = loadPuppeteer();
   const browser = await puppeteer.launch({
     headless: 'new',
-    args: ['--no-sandbox', '--disable-setuid-sandbox'],
+    args: [
+      '--no-sandbox',
+      '--disable-setuid-sandbox',
+      '--disable-dev-shm-usage',
+      '--disable-gpu',
+    ],
   });
   try {
     const page = await browser.newPage();
     await page.setUserAgent(UA);
     await page.setViewport({ width: viewportWidth, height: 900 });
+    // Runtime Behavior Discovery (Stage 5): wrap IntersectionObserver BEFORE the
+    // app boots so we learn which elements it wires up for scroll-reveal — the
+    // reliable signal, independent of whether the reveal fires in headless.
+    await page.evaluateOnNewDocument(() => {
+      window.__ioObserved = new Set();
+      const NIO = window.IntersectionObserver;
+      if (NIO) {
+        function WrappedIO(cb, opts) {
+          const inst = new NIO(cb, opts);
+          const obs = inst.observe.bind(inst);
+          inst.observe = function (el) { try { if (el && el.nodeType === 1) window.__ioObserved.add(el); } catch (e) {} return obs(el); };
+          return inst;
+        }
+        window.IntersectionObserver = WrappedIO;
+      }
+      // COUNT-UP sampler — starts BEFORE the app boots so it catches on-load
+      // count-ups (above-fold counters fire immediately). Re-scans for numeric
+      // displays every tick and keeps each one's PEAK; baked after capture.
+      window.__countMax = new Map();
+      const numOf = (s) => parseFloat(String(s).replace(/[^\d.]/g, ''));
+      const skipCount = (t) => /^[₹$€£]/.test(t) || (/^(19|20)\d\d$/.test(t.replace(/[^\d]/g, '')) && !/[+%]/.test(t));
+      const tick = () => {
+        if (!document.body) return;
+        const cands = document.querySelectorAll('span, div, p, h1, h2, h3, h4, strong, b');
+        for (let i = 0; i < cands.length; i++) {
+          const el = cands[i];
+          if (!(el.childNodes.length === 1 && el.firstChild && el.firstChild.nodeType === 3)) continue;
+          const t = (el.textContent || '').trim();
+          if (!/^[\d][\d.,\s]*[+%]?$/.test(t) || skipCount(t)) continue;
+          if (parseFloat(getComputedStyle(el).fontSize) < 20) continue;
+          const v = numOf(t); const cur = window.__countMax.get(el);
+          if (!isNaN(v) && (!cur || v > cur.n)) window.__countMax.set(el, { n: v, s: t });
+        }
+      };
+      window.__countTimer = setInterval(tick, 120);
+    });
     await page.goto(url, { waitUntil: 'networkidle2', timeout: 60000 });
     await new Promise((r) => setTimeout(r, 900)); // let late hydration settle
     // Let on-view animations COMPLETE so JS-driven finals are captured:
@@ -274,6 +349,30 @@ async function captureSite(url, { viewportWidth = 1280 } = {}) {
           window.__revealFrom.set(el, s);
         }
       });
+      // Behavior discovery: capture the FROM-state + timing of every scroll-reveal
+      // element — both class-based (wired to the app's IntersectionObserver) and
+      // inline-style reveals. Snapshotted now, while still hidden/pre-scroll.
+      window.__revealInit = new Map();
+      const grabReveal = (el) => {
+        if (!el || el.nodeType !== 1 || window.__revealInit.has(el)) return;
+        const c = getComputedStyle(el);
+        const op = parseFloat(c.opacity);
+        const tf = c.transform && c.transform !== 'none' ? c.transform : '';
+        const hiddenLike = op < 1 || (tf && tf !== 'matrix(1, 0, 0, 1, 0, 0)');
+        const hasTransition = c.transitionDuration !== '0s';
+        if (!hiddenLike || !hasTransition) return;   // must start hidden AND transition
+        let ty = 0;
+        const m1 = (el.getAttribute('style') || '').match(/translateY?\(([-\d.]+)px/);
+        const m2 = tf.match(/matrix\(\s*[-\d.]+,\s*[-\d.]+,\s*[-\d.]+,\s*[-\d.]+,\s*[-\d.]+,\s*([-\d.]+)\s*\)/);
+        if (m1) ty = parseFloat(m1[1]); else if (m2) ty = parseFloat(m2[1]);
+        window.__revealInit.set(el, { o: isNaN(op) ? 0 : op, ty: Math.round(ty),
+          d: c.transitionDuration, dl: c.transitionDelay, e: c.transitionTimingFunction });
+      };
+      (window.__ioObserved || new Set()).forEach(grabReveal);          // class-based reveals
+      window.__revealFrom.forEach((_s, el) => grabReveal(el));          // inline reveals / choreography
+
+      // (count-up sampler already running from evaluateOnNewDocument — see above)
+
       // slow scroll so IntersectionObserver-driven animations run to completion
       const h = () => document.body.scrollHeight;
       for (let y = 0; y <= h(); y += 400) { window.scrollTo(0, y); await sleep(120); }
@@ -452,16 +551,51 @@ async function captureSite(url, { viewportWidth = 1280 } = {}) {
           } catch { /* ignore */ }
         });
 
-        // Record opacity/transform reveals as data-from so script.js replays them
-        // from that state to their natural end (opacity:1 / transform:none).
-        window.__revealFrom.forEach((from, el) => {
+      }
+
+      // COUNT-UP numbers: stop the sampler and bake each element's captured peak
+      // as the final value (+ tag for re-animation), so it's never stuck at 0.
+      if (window.__countTimer) clearInterval(window.__countTimer);
+      if (window.__countMax) {
+        window.__countMax.forEach((v, el) => { try { if (el.isConnected && v.n > 0) { el.textContent = v.s; el.setAttribute('data-et-count', v.s); } } catch { /* ignore */ } });
+      }
+
+      // SVG DRAW: a path/circle/line whose stroke-dashoffset animates from full
+      // (undrawn) to a target (drawn) on view — line charts, donut rings. Read
+      // the drawn offset in view, pin it, tag data-et-draw (initial = dasharray).
+      try {
+        const drawCands = [].slice.call(document.querySelectorAll('path, circle, line, polyline')).filter((el) => {
+          const s = getComputedStyle(el);
+          const da = parseFloat(s.strokeDasharray);
+          const tp = s.transitionProperty || '';
+          return !isNaN(da) && da > 20 && (/stroke-dashoffset/.test(tp) || tp === 'all');
+        });
+        const drawFinals = [];
+        for (const el of drawCands) {
           try {
-            const parts = [];
-            const grab = (re) => { const m = from.match(re); if (m) parts.push(m[0].replace(/;$/, '')); };
-            grab(/opacity:\s*0(?:\.\d+)?/);
-            grab(/transform:\s*(?!none)[^;]+/);
-            if (parts.length) el.setAttribute('data-from', parts.join('; '));
+            (el.closest('svg') || el).scrollIntoView({ block: 'center' }); await sleep(1300);
+            const s = getComputedStyle(el);
+            const da = parseFloat(s.strokeDasharray);
+            const doff = parseFloat(s.strokeDashoffset);
+            if (!isNaN(doff)) drawFinals.push({ el, da, finOff: doff, dur: s.transitionDuration, dl: s.transitionDelay, ez: s.transitionTimingFunction });
           } catch { /* ignore */ }
+        }
+        window.scrollTo(0, 0); await sleep(120);
+        drawFinals.forEach((f) => {
+          try {
+            f.el.style.strokeDashoffset = String(f.finOff); // pin drawn state
+            f.el.setAttribute('data-et-draw', [Math.round(f.da), f.dur, f.dl, f.ez].join('|'));
+          } catch { /* ignore */ }
+        });
+      } catch { /* ignore */ }
+
+      // Tag every discovered scroll-reveal with its exact from-state + timing.
+      // build.js neutralizes the baked hidden state and reconstructs the reveal
+      // from this (opacity/translateY start, duration, delay, easing).
+      if (window.__revealInit) {
+        window.__revealInit.forEach((info, el) => {
+          // compact, quote-safe CSV: opacity|translateY|duration|delay|easing
+          try { if (el.isConnected) el.setAttribute('data-et-reveal', [info.o, info.ty, info.d, info.dl, info.e].join('|')); } catch (e) {}
         });
       }
       await sleep(40);

@@ -4,29 +4,38 @@ const API = '/api/convert';
 
 export default function App() {
   const [url, setUrl] = useState('');
+  const [figmaUrl, setFigmaUrl] = useState('');
+  const [figmaToken, setFigmaToken] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [result, setResult] = useState(null);
-  const [tab, setTab] = useState('html');
+  const [tab, setTab] = useState('preview');
 
   async function convert() {
-    if (!url.trim()) {
-      setError('Paste a Lovable URL first.');
+    const fig = figmaUrl.trim();
+    const lov = url.trim();
+    if (!fig && !lov) {
+      setError('Paste a Lovable URL or a Figma design URL.');
       return;
     }
     setLoading(true);
     setError('');
     setResult(null);
     try {
-      const res = await fetch(API, {
+      const isFigma = !!fig;
+      const res = await fetch(isFigma ? '/api/figma/convert' : API, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ url: url.trim(), write: true, downloadImages: true }),
+        body: JSON.stringify(
+          isFigma
+            ? { url: fig, token: figmaToken.trim() || undefined }
+            : { url: lov, format: 'dev' },   // developer mode: assembled bundle + live preview
+        ),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Conversion failed.');
       setResult(data);
-      setTab('html');
+      setTab(data.previewUrl ? 'preview' : 'html');
     } catch (e) {
       setError(e.message);
     } finally {
@@ -61,16 +70,50 @@ export default function App() {
             className="url-input"
             type="url"
             inputMode="url"
-            placeholder="https://your-project.lovable.app"
+            placeholder="https://your-project.lovable.app  (Lovable URL)"
             value={url}
             onChange={(e) => setUrl(e.target.value)}
             onKeyDown={onKeyDown}
             aria-label="Lovable URL"
           />
+        </div>
+
+        <div className="prompt-row">
+          <span className="prompt-sigil">◈</span>
+          <input
+            className="url-input"
+            type="url"
+            inputMode="url"
+            placeholder="https://www.figma.com/design/…?node-id=…  (Figma URL)"
+            value={figmaUrl}
+            onChange={(e) => setFigmaUrl(e.target.value)}
+            onKeyDown={onKeyDown}
+            aria-label="Figma URL"
+          />
           <button className="run" onClick={convert} disabled={loading}>
-            {loading ? 'Extracting…' : 'Generate'}
+            {loading ? 'Generating…' : 'Generate'}
           </button>
         </div>
+
+        {figmaUrl.trim() && (
+          <div className="prompt-row figma-auth">
+            <span className="prompt-sigil" aria-hidden="true"> </span>
+            <input
+              className="url-input"
+              type="password"
+              placeholder="Figma Personal Access Token (or leave blank if connected / set in .env)"
+              value={figmaToken}
+              onChange={(e) => setFigmaToken(e.target.value)}
+              aria-label="Figma token"
+            />
+            <a className="run secondary" href="/api/figma/login">Connect Figma</a>
+          </div>
+        )}
+
+        <p className="hint">
+          Paste a <strong>Lovable</strong> URL <em>or</em> a <strong>Figma</strong> design URL and click Generate.
+          Figma needs a token — paste one, set <code>FIGMA_TOKEN</code> in <code>.env</code>, or click Connect Figma.
+        </p>
 
         {error && <p className="error" role="alert">{error}</p>}
       </section>
@@ -99,6 +142,11 @@ export default function App() {
           </div>
 
           <div className="tabs">
+            {result.previewUrl && (
+              <button className={tab === 'preview' ? 'tab active' : 'tab'} onClick={() => setTab('preview')}>
+                ▶ preview
+              </button>
+            )}
             <button className={tab === 'html' ? 'tab active' : 'tab'} onClick={() => setTab('html')}>
               index.html
             </button>
@@ -111,17 +159,30 @@ export default function App() {
               </button>
             )}
             <span className="spacer" />
-            <CopyButton
-              text={tab === 'html' ? result.html : tab === 'css' ? result.css : scriptText}
-              label={`Copy ${tab === 'html' ? 'HTML' : tab === 'css' ? 'CSS' : 'script.js'}`}
-            />
+            {tab === 'preview' ? (
+              <a className="copy" href={result.previewUrl} target="_blank" rel="noreferrer">Open in new tab ↗</a>
+            ) : (
+              <CopyButton
+                text={tab === 'html' ? result.html : tab === 'css' ? result.css : scriptText}
+                label={`Copy ${tab === 'html' ? 'HTML' : tab === 'css' ? 'CSS' : 'script.js'}`}
+              />
+            )}
           </div>
 
-          <pre className="code"><code>{
-            tab === 'html' ? result.html
-              : tab === 'css' ? result.css
-                : scriptText
-          }</code></pre>
+          {tab === 'preview' ? (
+            <iframe
+              className="preview-frame"
+              src={result.previewUrl}
+              title="Generated site preview"
+              style={{ width: '100%', height: '70vh', border: '1px solid #2a2a2a', borderRadius: 8, background: '#fff' }}
+            />
+          ) : (
+            <pre className="code"><code>{
+              tab === 'html' ? result.html
+                : tab === 'css' ? result.css
+                  : scriptText
+            }</code></pre>
+          )}
         </section>
       )}
 

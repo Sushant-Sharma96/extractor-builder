@@ -1,0 +1,12 @@
+{
+  "name": "stripmine — Figma to HTML/CSS",
+  "id": "stripmine-figma-to-html",
+  "api": "1.0.0",
+  "main": "code.js",
+  "ui": "ui.html",
+  "editorType": ["figma"],
+  "networkAccess": {
+    "allowedDomains": ["http://localhost:3001"],
+    "reasoning": "Sends the selected design to the local stripmine server to generate HTML/CSS."
+  }
+}

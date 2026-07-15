@@ -1,0 +1,9 @@
+node_modules
+client/dist
+output
+.figma-cache
+.git
+.env
+*.md
+figma-plugin
+_test.js

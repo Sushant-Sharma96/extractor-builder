@@ -77,7 +77,7 @@ function buildReadme(model, result, assetMap) {
 }
 
 async function packageSite(model, result, { outRoot, downloadImages = true } = {}) {
-  const slug = slugifyUrl(model.url);
+  const slug = (model.slug ? String(model.slug).replace(/[^a-z0-9-]/gi, '-').toLowerCase().replace(/^-+|-+$/g, '') : '') || slugifyUrl(model.url);
   const dir = path.join(outRoot, slug);
   const assetsDir = path.join(dir, 'assets');
   fs.mkdirSync(dir, { recursive: true });
@@ -86,8 +86,9 @@ async function packageSite(model, result, { outRoot, downloadImages = true } = {
   if (downloadImages) assetMap = await downloadAssets(model.assets, assetsDir);
 
   const html = rewriteAssetRefs(result.html, assetMap);
+  const css = rewriteAssetRefs(result.css, assetMap); // Figma bg-image url()s live in CSS
   fs.writeFileSync(path.join(dir, 'index.html'), html);
-  fs.writeFileSync(path.join(dir, 'styles.css'), result.css);
+  fs.writeFileSync(path.join(dir, 'styles.css'), css);
   fs.writeFileSync(path.join(dir, 'script.js'), result.js || '');
   fs.writeFileSync(path.join(dir, 'README.md'), buildReadme(model, result, assetMap));
 

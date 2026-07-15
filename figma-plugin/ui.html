@@ -1,0 +1,52 @@
+<style>
+  body { font: 13px -apple-system, system-ui, sans-serif; margin: 0; padding: 14px; color: #111827; }
+  h3 { margin: 0 0 4px; font-size: 14px; }
+  p.sub { margin: 0 0 12px; color: #6b7280; font-size: 12px; }
+  button { width: 100%; padding: 10px; border: 0; border-radius: 8px; font-weight: 600; cursor: pointer; margin-bottom: 8px; }
+  #gen { background: #4f46e5; color: #fff; }
+  #dl { background: #eef2ff; color: #3730a3; }
+  #status { font-size: 12px; color: #374151; white-space: pre-wrap; margin-top: 8px; min-height: 34px; }
+  .ok { color: #059669; } .err { color: #dc2626; }
+</style>
+<h3>stripmine → HTML / CSS</h3>
+<p class="sub">Select a frame in Figma, then Generate. Runs locally — no rate limits.</p>
+<button id="gen">Generate HTML / CSS</button>
+<button id="dl">Download design JSON</button>
+<div id="status"></div>
+<script>
+  var last = null;
+  var statusEl = document.getElementById('status');
+  function status(t, cls) { statusEl.className = cls || ''; statusEl.textContent = t; }
+
+  document.getElementById('gen').onclick = function () {
+    status('Reading design…');
+    parent.postMessage({ pluginMessage: { type: 'generate' } }, '*');
+  };
+  document.getElementById('dl').onclick = function () {
+    if (!last) { status('Generate first.'); return; }
+    var blob = new Blob([JSON.stringify({ name: last.name, tree: last.tree })], { type: 'application/json' });
+    var a = document.createElement('a');
+    a.href = URL.createObjectURL(blob); a.download = (last.name || 'design').replace(/[^\w-]+/g, '-') + '.json'; a.click();
+  };
+
+  onmessage = async function (e) {
+    var m = e.data.pluginMessage; if (!m) return;
+    if (m.type === 'status') status(m.msg);
+    else if (m.type === 'error') status('Error: ' + m.error, 'err');
+    else if (m.type === 'payload') {
+      last = m.payload;
+      status('Generating HTML/CSS…');
+      try {
+        var r = await fetch('http://localhost:3001/api/figma/plugin', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(m.payload),
+        });
+        var d = await r.json();
+        if (!r.ok) throw new Error(d.error || 'Server error');
+        status('✓ Done — ' + (d.sectionsSummary ? d.sectionsSummary.split(',').length + ' sections' : 'generated') +
+          '\nSaved to: ' + (d.output && d.output.dir || '(server output)'), 'ok');
+      } catch (err) {
+        status('Backend error: ' + err.message + '\n(Is `npm run dev` running on :3001?)', 'err');
+      }
+    }
+  };
+</script>
