@@ -292,6 +292,29 @@ function eyebrowLabel($el, $) {
   }
   return '';
 }
+// Normalize a raw label candidate into a short, human-readable phrase:
+// un-glue run-together words (CohortWorkshops → Cohort Workshops — the #1 cause
+// of garbage section names, since cheerio .text() concatenates sibling elements
+// with no spaces), drop bullet/separator glyphs, strip a leading index/kicker
+// number ("05 · Approach" → "Approach"), and collapse whitespace.
+function cleanPhrase(str) {
+  return String(str || '')
+    .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+    .replace(/[·•|—–]+/g, ' ')
+    .replace(/^\s*\d{1,2}\s+(?=[A-Za-z])/, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+// Best short name for a fallback (non-typed) section: a clean kicker/eyebrow if
+// present, else the first heading — capped at 4 words so a multi-card block can
+// never produce a glued run-on label. Returns '' when nothing usable is found.
+function fallbackName($el, $, heading) {
+  let cand = cleanPhrase(eyebrowLabel($el, $));
+  if (!cand || cand.length < 2) cand = cleanPhrase(heading);
+  const w = cand.split(' ').filter(Boolean);
+  if (w.length > 4) cand = w.slice(0, 4).join(' ');
+  return (cand.length >= 2 && cand.length <= 36 && /[a-z]/i.test(cand)) ? cand : '';
+}
 function detectSectionName(el, $, index, total) {
   const $el = $(el);
   const tag = el.tagName ? el.tagName.toLowerCase() : '';
@@ -308,7 +331,8 @@ function detectSectionName(el, $, index, total) {
   if (priceTokens >= 2 || /\bpricing\b|\bplans?\b|\btiers?\b|\/mo\b|per month/.test(lc)) return 'pricing';
   if ((text.match(/\d[\d,]*\+?%?/g) || []).length >= 3 && text.length < 220) return 'stats';
   if (/reserve|get started|sign up|book (your|a)|start (free|now|today)|get the brochure/.test(lc) && text.length < 600) return 'cta';
-  return slug(eyebrowLabel($el, $)) || slug(heading) || `block-${index + 1}`;
+  const fb = fallbackName($el, $, heading);
+  return (fb && slug(fb)) || `block-${index + 1}`;
 }
 const SEMANTIC_SECTION_TAGS = new Set(['section', 'header', 'footer', 'main', 'article']);
 function findSectionRoot($) {
@@ -333,7 +357,12 @@ function findSectionRoot($) {
 // --- CSS emit helpers --------------------------------------------------------
 // Normalize a couple of compiled-Tailwind values back to what a human writes:
 // the float-max "rounded-full" radius, and the 30-property "transition-all" list.
-const TRANSITION_SAFE = 'color, background-color, border-color, text-decoration-color, fill, stroke, opacity, box-shadow, transform, filter, backdrop-filter';
+// NOTE: must include the Tailwind v4 transform SUB-properties (translate, scale,
+// rotate) — v4 animates them as standalone CSS properties, NOT via `transform`.
+// Omitting them makes group-hover:scale-105 / hover:translate-* jump instantly
+// (the "smooth hover lost" QA bug) because the transition-property list never
+// names the property that actually changes.
+const TRANSITION_SAFE = 'color, background-color, border-color, text-decoration-color, fill, stroke, opacity, box-shadow, transform, translate, scale, rotate, filter, backdrop-filter';
 function normalizeValue(prop, v) {
   if (/3\.40282[\de+]*px/i.test(v)) v = v.replace(/3\.40282[\de+]*px/gi, '9999px');
   // Avoid transition:all (perf) — both the compiled 30-property "transition-all"
@@ -342,8 +371,21 @@ function normalizeValue(prop, v) {
   if (prop === 'transition-property' && (v.trim() === 'all' || (/content-visibility|overlay/.test(v) && v.split(',').length > 10))) v = TRANSITION_SAFE;
   return v;
 }
+// HOST-ISOLATION: every generated design declaration is emitted !important so a
+// host stylesheet (Bootstrap, the project's own h1-h6/a/body element rules) can
+// NEVER override our output. This is safe for OUR OWN cascade because specificity
+// still decides AMONG !important rules: a utility/component (.et-x, 0,1,0) beats
+// the scoped element reset (:where(.et-scope) h1, 0,0,1), and a :hover/state rule
+// (0,2,0) beats its base — exactly as before. Only host NON-important element
+// rules lose. Inline styles are also made !important (see walk) so they still win
+// over class rules. Custom-property DEFINITIONS (:root/.et-scope var blocks) are
+// NOT run through this — they need normal cascade to resolve.
+function withImportant(v) {
+  const s = String(v).trim();
+  return /!important\s*$/i.test(s) ? s : s + ' !important';
+}
 function declBlock(map, indent = '  ') {
-  return [...map.entries()].map(([p, v]) => `${indent}${p}: ${normalizeValue(p, v)};`).join('\n');
+  return [...map.entries()].map(([p, v]) => `${indent}${p}: ${withImportant(normalizeValue(p, v))};`).join('\n');
 }
 function selectorFor(name, ctx) {
   let sel = '.' + name;
@@ -771,6 +813,14 @@ function build(model) {
     // carries the animation start state so script.js can replay the animation.
     let inlineStyle = rewriteCssUrls(($el.attr('style') || '').replace(/"/g, "'").replace(/\s+/g, ' ').trim(), absUrl);
     if (revealRaw) inlineStyle = neutralizeRevealInline(inlineStyle); // drop baked opacity/transform (choreography)
+    // Host-isolation: class rules are emitted !important; make inline declarations
+    // !important too so real per-element values (progress widths, chart positions,
+    // reveal vars) still win over the class rules. splitDeclarations respects
+    // parens/data: URIs so we never split inside a url()/gradient.
+    if (inlineStyle) {
+      inlineStyle = splitDeclarations(inlineStyle)
+        .map(([p, v]) => `${p}: ${withImportant(v)}`).join('; ');
+    }
 
     const children = $el.contents().toArray();
     const inner = children.map((c) => walk(c, section)).filter(Boolean).join('');
@@ -821,9 +871,23 @@ function build(model) {
   const sectionInfo = [];              // { et, cls } per section (for post-walk pinning)
   const sectionMarkerMap = new Map();  // wrapper marker token -> et-<section>
   const usedSecKeys = new Set();
+  // Friendly display names for the classified section types (the platform's import
+  // list shows `label`). Everything else is Title-Cased from its detected slug.
+  const TYPE_LABEL = {
+    header: 'Header', hero: 'Hero', footer: 'Footer', announcement: 'Announcement',
+    faq: 'FAQ', testimonials: 'Testimonials', pricing: 'Pricing', stats: 'Stats',
+    cta: 'Call to Action', agenda: 'Agenda',
+  };
+  const usedLabels = new Map(); // display label -> count, so the list never repeats a name
   sectionEls.forEach((el, i) => {
     const rawName = detectSectionName(el, $, i, sectionEls.length);
-    const label = rawName.replace(/-/g, ' ').replace(/\b\w/g, (m) => m.toUpperCase());
+    let label = TYPE_LABEL[rawName]
+      || (/^block-\d+$/.test(rawName) ? `Section ${i + 1}` : rawName.replace(/-/g, ' ').replace(/\b\w/g, (m) => m.toUpperCase()));
+    // De-duplicate the human label so two "Pricing"/"Call to Action" blocks read
+    // as "Pricing" / "Pricing 2" instead of two identical, confusing entries.
+    const seen = (usedLabels.get(label) || 0) + 1;
+    usedLabels.set(label, seen);
+    if (seen > 1) label = `${label} ${seen}`;
     let secKey = sanitizeSeg(rawName), k = 2;
     while (usedSecKeys.has(secKey)) secKey = `${sanitizeSeg(rawName)}-${k++}`;
     usedSecKeys.add(secKey);
@@ -941,8 +1005,28 @@ function build(model) {
   // that prefer to emit <link> tags themselves.
   const fontImports = (model.fontLinks || []).map((h) => `@import url("${h}");`).join('\n');
   const globalCss = (fontImports ? fontImports + '\n\n' : '') + finishCss(cssBuilt.globalCss);
-  const html = prettyHtml(buildHtml(model, bodyHtml));
-  const js = buildScript(reveal);
+  // rewrite inline `animation:` refs to the namespaced keyframe names (both the full
+  // doc and the per-section split derive from this, so animations actually run).
+  const bodyHtmlNs = namespaceInlineAnimations(bodyHtml, kfNames);
+  const html = prettyHtml(buildHtml(model, bodyHtmlNs));
+  // Feature detection for the JS generator: emit only handlers whose feature is
+  // actually present in the final markup/CSS (QA: no generic/unrelated JS). Cheap
+  // string scans over the already-built body + stylesheet.
+  const feat = {
+    anchors: /href=["']#/.test(bodyHtmlNs),
+    ariaExpanded: /aria-expanded/.test(bodyHtmlNs),
+    accTrigger: /data-acc-trigger/.test(bodyHtmlNs),
+    tabsAria: /role=["']tablist["']/.test(bodyHtmlNs),
+    tabsData: /data-tabs[=\s>"']/.test(bodyHtmlNs),
+    dismissBanner: /data-dismiss-banner/.test(bodyHtmlNs),
+    reveal: (reveal && reveal.count > 0) || /\bet-reveal\b/.test(bodyHtmlNs),
+    count: /data-et-count|\bet-count\b/.test(bodyHtmlNs),
+    draw: /data-et-draw/.test(bodyHtmlNs),
+    fixedBars: /position\s*:\s*(fixed|sticky)/i.test(css),
+    dialogs: /role=["']dialog["']|aria-modal|data-close|data-overlay|aria-label=["'][Cc]lose|class=["'][^"']*(modal|overlay|backdrop|dialog)/i.test(bodyHtmlNs),
+  };
+  const js = buildScript(reveal, feat);
+  console.log('[build] JS features gated:', Object.keys(feat).filter((k) => feat[k]).join(', ') || '(none)');
   const summary = [...new Set(sectionOrder.map((s) => s.label))].join(', ');
 
   // Per-section split for the event-platform import: the final body has exactly
@@ -951,7 +1035,7 @@ function build(model) {
   const scss = (key) => finishCss(cssBuilt.sectionCss[key] || '');
   let sectionsDetailed;
   try {
-    const $$ = cheerio.load(`<body>${bodyHtml}</body>`, { decodeEntities: false });
+    const $$ = cheerio.load(`<body>${bodyHtmlNs}</body>`, { decodeEntities: false });
     const kids = $$('body').children().toArray();
     sectionsDetailed = sectionOrder.map((s, i) => {
       const el = kids[i];
@@ -1061,8 +1145,15 @@ ${fontLinks ? fontLinks + '\n' : ''}  <link rel="stylesheet" href="styles.css">
 <body>
   <!-- Each section carries class="et-scope": all generated CSS is scoped under
        .et-scope, so it never touches host styles AND every section is
-       self-contained (tokens + reset apply without any outer wrapper). -->
+       self-contained (tokens + reset apply without any outer wrapper). The
+       standalone page also wraps them in .et-page — a scoped backdrop that
+       carries the page background (var(--color-background)), so sections with a
+       SEMI-TRANSPARENT background (e.g. bg-card/30) layer over solid dark
+       instead of showing through to white. Mirrors the original min-h-screen
+       bg-background wrapper. The per-section export omits this wrapper. -->
+  <div class="et-scope et-page">
 ${body}
+  </div>
   <script src="script.js"></script>
 </body>
 </html>
@@ -1171,6 +1262,18 @@ function namespaceKeyframes(css, names) {
     return prop + v;
   });
   return css;
+}
+// Keyframes get namespaced (X → et-kf-X) in CSS, but inline `style="animation:X"`
+// on ELEMENTS is not CSS — rewrite those refs too, or the (renamed) keyframe won't
+// match and the animation silently dies (e.g. story-drift/quote/rule/caret/underline).
+function namespaceInlineAnimations(html, names) {
+  if (!html || !names || !names.length) return html;
+  const uniq = [...new Set(names)];
+  return html.replace(/(animation(?:-name)?\s*:\s*)([^;"'}]+)/g, (m, prop, val) => {
+    let v = val;
+    for (const n of uniq) v = v.replace(new RegExp('(^|[\\s,])' + n.replace(/[-]/g, '\\-') + '(?=$|[\\s,])', 'g'), '$1et-kf-' + n);
+    return prop + v;
+  });
 }
 
 // ── Phase-2 structured extraction ───────────────────────────────────────────
@@ -2012,6 +2115,10 @@ function buildTwigTemplate($$, el, structured) {
 function buildCss(model, { sectionOrder, complexRules, tokenToNames, failedRuleIdx, skipRuleIdx, unresolvedTw, factored, reveal }) {
   const parts = [];
   const keepTw = unresolvedTw || new Set();
+  // group-hover/peer & other combinator rules reference --tw-* transform vars
+  // (translate/scale). Their @property `initial-value: 0` defaults MUST be emitted or
+  // `translate: var(--tw-translate-x) var(--tw-translate-y)` is invalid and no-ops.
+  for (const r of (complexRules || [])) for (const v of ((r.css || '').match(/--tw-[\w-]+/g) || [])) keepTw.add(v);
   parts.push(`/* styles.css — generated from the site's own compiled CSS */`);
 
   // Host root override (INTENTIONALLY global, not scoped): the ET platform sets
@@ -2048,7 +2155,7 @@ function buildCss(model, { sectionOrder, complexRules, tokenToNames, failedRuleI
       if (/lovable-badge/i.test(r.selector)) continue;      // drop removed-badge CSS
       const decls = stripTw(r.css);                          // drop flattened --tw resets
       if (!decls.length) continue;
-      const rule = `${scopeSelector(r.selector)} {\n${decls.map(([p, v]) => `  ${p}: ${v};`).join('\n')}\n}`;
+      const rule = `${scopeSelector(r.selector)} {\n${decls.map(([p, v]) => `  ${p}: ${withImportant(v)};`).join('\n')}\n}`;
       if (r.media) (baseMedia[r.media] || (baseMedia[r.media] = [])).push(rule); else baseFlat.push(rule);
     }
     let base = baseFlat.join('\n');
@@ -2058,6 +2165,13 @@ function buildCss(model, { sectionOrder, complexRules, tokenToNames, failedRuleI
   // The hidden attribute must win even when a class sets display (accordions,
   // closed dialogs rely on this).
   parts.push(`/* --- hidden --- */\n${scopeSelector('[hidden]')} { display: none !important; }`);
+
+  // Page backdrop: the standalone export wraps all sections in .et-page (a
+  // .et-scope, so the page-background token resolves). It carries the solid page
+  // background so semi-transparent sections (bg-card/30 etc.) layer over dark
+  // instead of white. background-color comes from the base body rule already
+  // scoped to :where(.et-scope); here we just guarantee full-viewport coverage.
+  parts.push(`/* --- page backdrop --- */\n.et-page { min-height: 100vh; }`);
 
   // Scroll-reveal (reconstructed from the discovered Behavior IR). Elements are
   // VISIBLE by default; script.js adds .et-in as each enters view, playing a
@@ -2153,13 +2267,11 @@ ${scopeSelector(':where(a, button, [role="button"], input, select, textarea, sum
       }
     }
     const keep = rootDecls.filter(([p]) => used.has(p));
-    // Expose ONE common body-font variable for the whole microsite (the font
-    // shared by tags/elements), and apply it on the root with class specificity
-    // so it's the single lever for typography.
-    const bodyFontDecl = `  --body-font-family: var(--font-body, var(--default-font-family, ui-sans-serif, system-ui, sans-serif));`;
+    // Tree-shaken site tokens only — no synthetic --body-font-family / forced
+    // root font-family (those fought real site typography and dangling vars).
     parts[varsIdx] = keep.length
-      ? `/* ===== Variables ===== */\n${ROOT} {\n${keep.map(([p, v]) => `  ${p}: ${v};`).join('\n')}\n${bodyFontDecl}\n}\n\n${ROOT} { font-family: var(--body-font-family); }`
-      : `${ROOT} {\n${bodyFontDecl}\n}\n\n${ROOT} { font-family: var(--body-font-family); }`;
+      ? `/* ===== Variables ===== */\n${ROOT} {\n${keep.map(([p, v]) => `  ${p}: ${v};`).join('\n')}\n}`
+      : '';
   }
 
   const full = parts.filter(Boolean).join('\n\n') + '\n';
@@ -2182,11 +2294,21 @@ document.querySelectorAll('[data-tabs],[role=tablist]').forEach(function(s){if(s
 }if(document.readyState!=='loading')E();else document.addEventListener('DOMContentLoaded',E);})();`;
 
 // attributes. Same logic for any Lovable site (accordion, tabs, menu, scroll).
-function buildScript(reveal) {
-  return `// script.js — reconstructed interactivity (generated)
+// Feature-GATED interactivity generator. Each behaviour block is emitted ONLY
+// when the final markup actually contains that feature (detected in build() ->
+// `feat`), so a page with no tabs/accordions/dialogs never ships (or binds) that
+// code. This kills the QA "generic JavaScript / unrelated binding" issue: e.g.
+// the document-level dialog-close + Escape handlers are omitted entirely when
+// there is no modal/overlay. Shared helpers are emitted only when a block that
+// needs them is present.
+function buildScript(reveal, feat) {
+  feat = feat || {};
+  const P = [];
+  P.push(`// script.js — reconstructed interactivity (generated, feature-gated)
 (function () {
-  'use strict';
+  'use strict';`);
 
+  if (feat.anchors) P.push(`
   // Smooth-scroll for in-page anchor links.
   document.addEventListener('click', function (e) {
     var a = e.target.closest && e.target.closest('a[href^="#"]');
@@ -2195,13 +2317,15 @@ function buildScript(reveal) {
     if (!id) return;
     var t = document.getElementById(id) || document.querySelector('[name="' + CSS.escape(id) + '"]');
     if (t) { e.preventDefault(); t.scrollIntoView({ behavior: 'smooth', block: 'start' }); }
-  });
+  });`);
 
+  if (feat.ariaExpanded || feat.tabsAria) P.push(`
   function panelFor(trigger) {
     var id = trigger.getAttribute('aria-controls');
     return id ? document.getElementById(id) : null;
-  }
+  }`);
 
+  if (feat.ariaExpanded) P.push(`
   // Accordions / collapsibles / mobile menus: any trigger with aria-expanded.
   document.querySelectorAll('[aria-expanded]').forEach(function (btn) {
     btn.addEventListener('click', function () {
@@ -2214,14 +2338,14 @@ function buildScript(reveal) {
         else { panel.hidden = false; panel.removeAttribute('hidden'); panel.setAttribute('data-state', 'open'); }
       }
     });
-  });
+  });`);
 
-  // Custom accordions (data-acc-trigger → its [data-acc-panel]). The panel may not
-  // be a direct sibling (e.g. an agenda session where the trigger is nested in a
-  // row and the panel is a sibling of that row), so resolve it by, in order:
-  // aria-controls id → nearest enclosing item → following sibling.
+  if (feat.accTrigger) P.push(`
+  // Custom accordions (data-acc-trigger -> its [data-acc-panel]). The panel may
+  // not be a direct sibling, so resolve it by: aria-controls id -> nearest
+  // enclosing item -> following sibling.
   document.querySelectorAll('[data-acc-trigger]').forEach(function (btn) {
-    if (btn.__eta) return; btn.__eta = 1; // once-flag: never bind twice (section js + globalJs share it)
+    if (btn.__eta) return; btn.__eta = 1; // once-flag: never bind twice
     btn.addEventListener('click', function () {
       var panel = null;
       var ac = btn.getAttribute('aria-controls');
@@ -2229,37 +2353,29 @@ function buildScript(reveal) {
       if (!panel) { var p = btn.nextElementSibling; while (p && !p.hasAttribute('data-acc-panel')) p = p.nextElementSibling; panel = p; }
       if (!panel) { var item = btn.closest('li,[class*="item"],[class*="agenda"]') || btn.parentElement; if (item) panel = item.querySelector('[data-acc-panel]'); }
       if (!panel) return;
-      var open = !panel.hasAttribute('hidden'); // hidden attribute is the source of truth
+      var open = !panel.hasAttribute('hidden'); // hidden attribute is source of truth
       if (open) { panel.setAttribute('hidden', 'hidden'); panel.setAttribute('data-state', 'closed'); }
       else { panel.removeAttribute('hidden'); panel.setAttribute('data-state', 'open'); }
       btn.setAttribute('aria-expanded', open ? 'false' : 'true');
       btn.setAttribute('data-state', open ? 'closed' : 'open');
     });
-  });
+  });`);
 
-  // Active/selected STATE styling. Lovable renders a selected control with a
-  // conditional className (active variant vs inactive variant). The static
-  // capture freezes one snapshot: within a sibling group the active control has
-  // the MINORITY class and the rest share the inactive class. etVariant() derives
-  // the two variants by frequency; etSetActive() swaps ONLY the differing tokens
-  // (shared tokens like "group" are preserved), so the active look follows the
-  // click instead of being frozen on the captured tab. Returns null when no
-  // distinct variant was captured (styling is attribute-based) — then we just
-  // toggle data-state/aria-selected and let the CSS handle it.
+  if (feat.tabsAria || feat.tabsData) P.push(`
+  // Active/selected STATE styling: derive active vs inactive class variants by
+  // frequency (active = minority), then swap ONLY the differing tokens on click.
   function etVariant(items) {
     var freq = {};
     items.forEach(function (el) { var c = (el.getAttribute('class') || '').trim(); freq[c] = (freq[c] || 0) + 1; });
     var keys = Object.keys(freq);
     if (keys.length < 2) return null;
-    keys.sort(function (a, b) { return freq[a] - freq[b]; }); // fewest first = active variant
-    // NOTE: split on ' ' (not /\\s+/) — this string is emitted via a template
-    // literal where a single-backslash \\s would be stripped to a literal "s".
+    keys.sort(function (a, b) { return freq[a] - freq[b]; });
     var a = keys[0].split(' ').filter(Boolean), i = keys[keys.length - 1].split(' ').filter(Boolean);
     var aSet = {}, iSet = {};
     a.forEach(function (t) { aSet[t] = 1; }); i.forEach(function (t) { iSet[t] = 1; });
     return {
-      add: a.filter(function (t) { return t && !iSet[t]; }),   // tokens present only when active
-      rem: i.filter(function (t) { return t && !aSet[t]; }),   // tokens present only when inactive
+      add: a.filter(function (t) { return t && !iSet[t]; }),
+      rem: i.filter(function (t) { return t && !aSet[t]; }),
       activeClass: keys[0],
     };
   }
@@ -2270,8 +2386,9 @@ function buildScript(reveal) {
     if (on) { v.rem.forEach(function (t) { delete set[t]; }); v.add.forEach(function (t) { set[t] = 1; }); }
     else { v.add.forEach(function (t) { delete set[t]; }); v.rem.forEach(function (t) { set[t] = 1; }); }
     el.setAttribute('class', Object.keys(set).join(' '));
-  }
+  }`);
 
+  if (feat.tabsAria) P.push(`
   // Tabs: role=tablist / role=tab / aria-controls -> role=tabpanel.
   document.querySelectorAll('[role="tablist"]').forEach(function (list) {
     if (list.__ett) return; list.__ett = 1;
@@ -2290,9 +2407,10 @@ function buildScript(reveal) {
     tabs.forEach(function (tab) { tab.addEventListener('click', function () { activate(tab); }); });
     var init = (v && tabs.filter(function (t) { return (t.getAttribute('class') || '').trim() === v.activeClass; })[0])
       || tabs.filter(function (t) { return t.getAttribute('aria-selected') === 'true'; })[0] || tabs[0];
-    activate(init); // normalize so the styled-active tab and shown panel agree
-  });
+    activate(init);
+  });`);
 
+  if (feat.tabsData) P.push(`
   // Tabs: captured tab groups swap their stashed [data-tab-panel] siblings.
   document.querySelectorAll('[data-tabs]').forEach(function (group) {
     if (group.__ett) return; group.__ett = 1;
@@ -2308,22 +2426,21 @@ function buildScript(reveal) {
     }
     tabs.forEach(function (t) { t.addEventListener('click', function () { activate(t); }); });
     var init = (v && tabs.filter(function (t) { return (t.getAttribute('class') || '').trim() === v.activeClass; })[0]) || tabs[0];
-    activate(init); // normalize the captured snapshot to a consistent active tab
-  });
+    activate(init);
+  });`);
 
+  if (feat.dismissBanner) P.push(`
   // Consent/cookie banners: any button inside a tagged banner dismisses it.
   document.querySelectorAll('[data-dismiss-banner]').forEach(function (banner) {
     banner.addEventListener('click', function (e) {
       if (e.target.closest && e.target.closest('button, a[role="button"], [data-close]')) { banner.setAttribute('hidden', ''); }
     });
-  });
+  });`);
 
-  // Scroll-driven animations (reveal / count-up / svg-draw), reconstructed from
-  // the Behavior IR. One shared factory + a single reduced-motion / IO-support
-  // guard replaces three near-duplicate observer blocks. Each animation keeps
-  // its OWN trigger geometry (rootMargin), so timing is byte-identical to the
-  // per-block version. A missed or disabled trigger leaves the element in its
-  // final, visible state — never blank.
+  if (feat.reveal || feat.count || feat.draw) P.push(`
+  // Scroll-driven animations (reveal / count-up / svg-draw). One shared factory
+  // + a single reduced-motion / IO-support guard. A missed trigger leaves the
+  // element in its final, visible state -- never blank.
   var MOTION_OK = ('IntersectionObserver' in window)
     && !(window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches);
   function observeOnce(sel, opts, onEnter) {
@@ -2333,24 +2450,24 @@ function buildScript(reveal) {
     var io = new IntersectionObserver(function (entries) {
       entries.forEach(function (e) {
         if (!e.isIntersecting) return;
-        io.unobserve(e.target); // once
+        io.unobserve(e.target);
         onEnter(e.target, e);
       });
     }, opts);
     els.forEach(function (el) { io.observe(el); });
-  }
+  }`);
 
-  // Reveal: add .et-in (plays the fade-up keyframe from the original
-  // from-state/timing) as each enters from below. Elements already high in view
-  // when observed are left visible without a flash.
+  if (feat.reveal) P.push(`
+  // Reveal: add .et-in (plays the fade-up keyframe) as each enters from below.
   observeOnce('.et-reveal', { rootMargin: '0px 0px 20% 0px', threshold: 0 }, function (el, e) {
     if (e.boundingClientRect.top > window.innerHeight * 0.5) el.classList.add('et-in');
-  });
+  });`);
 
+  if (feat.count) P.push(`
   // Count-up: final value shown by default; on scroll-in animate 0 -> final once.
   observeOnce('.et-count', { rootMargin: '0px 0px -10% 0px', threshold: 0 }, function (el) {
     var finalStr = (el.getAttribute('data-et-count') || el.textContent || '').trim();
-    var numMatch = finalStr.match(/[0-9.,]+/); if (!numMatch) return; // [0-9] not \\d (template-literal strips the backslash)
+    var numMatch = finalStr.match(/[0-9.,]+/); if (!numMatch) return;
     var numStr = numMatch[0], idx = finalStr.indexOf(numStr);
     var prefix = finalStr.slice(0, idx), suffix = finalStr.slice(idx + numStr.length);
     var target = parseFloat(numStr.replace(/,/g, '')); if (isNaN(target)) return;
@@ -2359,25 +2476,77 @@ function buildScript(reveal) {
     function fmt(v) { return prefix + (decimals ? v.toFixed(decimals) : Math.round(v).toLocaleString()) + suffix; }
     function step(ts) { if (!t0) t0 = ts; var p = Math.min(1, (ts - t0) / dur); el.textContent = fmt(target * (1 - Math.pow(1 - p, 3))); if (p < 1) requestAnimationFrame(step); else el.textContent = finalStr; }
     requestAnimationFrame(step);
-  });
+  });`);
 
-  // SVG draw (line charts / donut rings): rests DRAWN; on scroll-in replay
-  // stroke-dashoffset from full (undrawn) to the drawn value once.
+  if (feat.draw) P.push(`
+  // SVG draw: rests DRAWN; on scroll-in replay stroke-dashoffset once.
   observeOnce('[data-et-draw]', { rootMargin: '0px 0px -5% 0px', threshold: 0 }, function (el) {
-    var p = (el.getAttribute('data-et-draw') || '').split('|'); // dasharray|dur|delay|easing
+    var p = (el.getAttribute('data-et-draw') || '').split('|');
     var init = p[0], dur = p[1] || '1200ms', dl = p[2] || '0s', ez = p[3] || 'ease';
     var fin = (el.style.strokeDashoffset || getComputedStyle(el).strokeDashoffset || '0');
     el.style.transition = 'none'; el.style.strokeDashoffset = init; el.getBoundingClientRect();
     el.style.transition = 'stroke-dashoffset ' + dur + ' ' + ez + ' ' + dl; el.style.strokeDashoffset = fin;
-  });
+  });`);
 
+  if (feat.fixedBars) P.push(`
+  // Scroll-triggered fixed bars (sticky header / bottom CTA). Reveal any
+  // position:fixed element that STARTS hidden (near-zero opacity or translated
+  // out of view) once scrolled past the hero; dialogs/overlays are excluded.
+  (function () {
+    var EXCL = /cookie|consent|banner|modal|dialog|overlay|backdrop|toast|popup|drawer|sheet/i;
+    var bars = [];
+    Array.prototype.slice.call(document.querySelectorAll('*')).forEach(function (el) {
+      if (el.hasAttribute('hidden')) return;
+      if (el.getAttribute('role') === 'dialog' || el.getAttribute('aria-modal') === 'true') return;
+      if (EXCL.test(el.className || '')) return;
+      var cs = getComputedStyle(el);
+      if (cs.position !== 'fixed') return;
+      if (cs.display === 'none' || cs.visibility === 'hidden') return;
+      var r = el.getBoundingClientRect();
+      if (!r.width || !r.height) return;
+      var hiddenByOpacity = parseFloat(cs.opacity) < 0.05;
+      var offView = (r.bottom <= 1) || (r.top >= (window.innerHeight - 1));
+      if (hiddenByOpacity || offView) bars.push(el);
+    });
+    if (bars.length) {
+      bars.forEach(function (el) { el.style.setProperty('transition', 'opacity .35s ease, transform .35s ease, translate .35s ease', 'important'); });
+      var shown = false;
+      var upd = function () {
+        var want = window.pageYOffset > (window.innerHeight * 0.6);
+        if (want === shown) return;
+        shown = want;
+        // Reveal by clearing every hidden-state property Lovable uses: opacity,
+        // BOTH transform and translate (Tailwind v4 emits the translate property),
+        // pointer-events. Generated CSS is !important for host-isolation, so these
+        // inline overrides MUST be set with 'important' priority to win over the
+        // element's own opacity-0 / translate class; removeProperty on scroll-back.
+        bars.forEach(function (el) {
+          if (want) {
+            el.style.setProperty('opacity', '1', 'important');
+            el.style.setProperty('transform', 'none', 'important');
+            el.style.setProperty('translate', 'none', 'important');
+            el.style.setProperty('pointer-events', 'auto', 'important');
+          } else {
+            el.style.removeProperty('opacity');
+            el.style.removeProperty('transform');
+            el.style.removeProperty('translate');
+            el.style.removeProperty('pointer-events');
+          }
+        });
+      };
+      window.addEventListener('scroll', upd, { passive: true });
+      window.addEventListener('resize', upd, { passive: true });
+      upd();
+    }
+  })();`);
+
+  if (feat.dialogs) P.push(`
   // Dismissable overlays: modals/dialogs AND cookie/consent banners.
   function hideEl(el) { if (el) { el.setAttribute('hidden', ''); el.setAttribute('data-state', 'closed'); } }
   function closeDialogs() {
     document.querySelectorAll('[role="dialog"], [aria-modal="true"], .modal, [data-state="open"][class*="dialog" i]').forEach(hideEl);
     document.querySelectorAll('[data-overlay], [class*="overlay" i], [class*="backdrop" i]').forEach(hideEl);
   }
-  // Find the dismissable container (banner/modal/overlay) an element sits in.
   function overlayContainer(el) {
     var n = el;
     while (n && n !== document.body) {
@@ -2386,25 +2555,26 @@ function buildScript(reveal) {
         && (n.getAttribute('role') === 'dialog' || /cookie|consent|banner|modal|dialog|overlay|toast|popup/i.test(n.className || ''))) return n;
       n = n.parentElement;
     }
-    // fall back to the nearest fixed ancestor
     n = el;
     while (n && n !== document.body) { if (getComputedStyle(n).position === 'fixed') return n; n = n.parentElement; }
     return null;
   }
   document.addEventListener('click', function (e) {
     var el = e.target;
-    // explicit close controls
     var closeBtn = el.closest && el.closest('[aria-label="Close" i], [aria-label="close" i], [data-close], button[class*="close" i]');
     if (closeBtn) { var c = overlayContainer(closeBtn); if (c) hideEl(c); else closeDialogs(); return; }
-    // cookie/consent buttons (Accept / Decline / Got it / Agree / Reject / OK)
     var btn = el.closest && el.closest('button, a[role="button"]');
     if (btn && /^(accept|decline|reject|agree|got it|allow|dismiss|ok(ay)?|i understand|continue)(?![a-z])/i.test((btn.textContent || '').trim())) {
       var cont = overlayContainer(btn); if (cont) hideEl(cont); return;
     }
   });
-  document.addEventListener('keydown', function (e) { if (e.key === 'Escape') closeDialogs(); });
-})();
-`;
+  document.addEventListener('keydown', function (e) { if (e.key === 'Escape') closeDialogs(); });`);
+
+  P.push(`
+})();`);
+  return P.join('\n');
 }
 
-module.exports = { build };
+// Also export the pure section-boundary helpers so the v2 pipeline (DG) can reuse
+// the SAME section detection as v1 — additive only, no behavior change to build().
+module.exports = { build, findSectionRoot, detectSectionName };

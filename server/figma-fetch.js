@@ -70,21 +70,31 @@ async function fetchNode(fileKey, nodeId, auth, { refresh = false } = {}) {
   if (!fileKey) throw new Error('Could not read a Figma file key from that URL.');
   const cacheFile = path.join(CACHE_DIR, `${fileKey}__${(nodeId || 'root').replace(/[^\w.-]/g, '_')}.json`);
   if (!refresh && fs.existsSync(cacheFile)) {
-    try { return JSON.parse(fs.readFileSync(cacheFile, 'utf8')); } catch { /* fall through to fetch */ }
+    try {
+      const snap = JSON.parse(fs.readFileSync(cacheFile, 'utf8'));
+      console.log(`[figma] CACHE HIT  ${fileKey}/${nodeId || 'root'} — reading local snapshot, 0 REST calls`);
+      snap.cache = 'HIT';
+      return snap;
+    } catch { /* corrupt snapshot → fall through to a fresh fetch */ }
   }
+  console.log(`[figma] CACHE ${refresh ? 'REFRESH' : 'MISS'} ${fileKey}/${nodeId || 'root'} — fetching from Figma REST (geometry=paths), then caching`);
   let result;
   if (nodeId) {
-    const data = await figmaGet(`/files/${fileKey}/nodes?ids=${encodeURIComponent(nodeId)}`, auth);
+    // geometry=paths → vector path data travels in the JSON, so icons are
+    // reconstructed locally (zero /images render calls, the endpoint that locks).
+    const data = await figmaGet(`/files/${fileKey}/nodes?ids=${encodeURIComponent(nodeId)}&geometry=paths`, auth);
     const entry = data.nodes && data.nodes[nodeId];
     if (!entry || !entry.document) throw new Error('That node was not found in the file (check the node-id).');
-    result = { document: entry.document, name: data.name || entry.document.name, fileName: data.name };
+    result = { document: entry.document, name: data.name || entry.document.name, fileName: data.name, version: entry.document.version || data.version || null };
   } else {
-    const data = await figmaGet(`/files/${fileKey}?depth=100`, auth);
+    const data = await figmaGet(`/files/${fileKey}?depth=100&geometry=paths`, auth);
     const page = data.document.children.find((c) => c.type === 'CANVAS') || data.document.children[0];
     const frame = (page.children || []).find((c) => c.type === 'FRAME') || page;
-    result = { document: frame, name: data.name, fileName: data.name };
+    result = { document: frame, name: data.name, fileName: data.name, version: data.version || null };
   }
   try { fs.mkdirSync(CACHE_DIR, { recursive: true }); fs.writeFileSync(cacheFile, JSON.stringify(result)); } catch { /* cache best-effort */ }
+  console.log(`[figma] SNAPSHOT SAVED ${cacheFile} — subsequent Generate for this URL = 0 REST calls`);
+  result.cache = 'MISS';
   return result;
 }
 

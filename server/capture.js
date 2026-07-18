@@ -67,6 +67,11 @@ function extractModel() {
       token += c; i++;
     }
     const rest = sel.slice(i); // pseudos, e.g. ":hover" or "::before" or ":hover:focus"
+    // group-hover/peer/contextual selectors (Tailwind v4 emits e.g.
+    // `.X:is(:where(.group):hover *)`) are COMBINATOR rules, not simple classes.
+    // Return null so they route to complexRules → build.js emitCombinatorRules
+    // renders them as `.group:hover .<semantic>` etc. (fixes QA §A dropped hover).
+    if (/:(is|where)\(/.test(rest) && (/\.(group|peer)\b/.test(rest) || /[>~]/.test(rest) || /\s\*/.test(rest))) return null;
     const states = [];
     let pseudoEl = null;
     const re = /(::?)([a-z-]+)(\([^)]*\))?/g;

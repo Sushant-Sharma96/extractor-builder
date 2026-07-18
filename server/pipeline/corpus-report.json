@@ -1,0 +1,793 @@
+{
+  "generatedFor": "ir-1.1.0",
+  "rows": [
+    {
+      "name": "etauto-revive",
+      "ok": true,
+      "gate": true,
+      "failed": [],
+      "irOk": true,
+      "sections": 24,
+      "perf": {
+        "captureMs": 14854,
+        "capturePlusMs": 16145,
+        "graphMs": 205,
+        "generateMs": 10,
+        "verifyMs": 7131,
+        "peakRssMb": 97,
+        "dgNodes": 1195,
+        "dgEdges": 1008,
+        "bgNodes": 16,
+        "bgEdges": 10,
+        "totalMs": 38345
+      },
+      "scores": {
+        "sectionPartition": {
+          "score": 1,
+          "pass": true,
+          "advisory": false,
+          "f0": "coverage=100.00% overlap=0.00%"
+        },
+        "domStructure": {
+          "score": 0.996,
+          "pass": true,
+          "advisory": false,
+          "f0": "tagCosine=0.997"
+        },
+        "cssFidelity": {
+          "score": 0.999,
+          "pass": true,
+          "advisory": false,
+          "f0": "props matched 3446/3448 over 431 matched elements (unmatched orig=15 v2=70)"
+        },
+        "behavior": {
+          "score": 1,
+          "pass": true,
+          "advisory": false,
+          "f0": "tab switch OK (10000→01000)"
+        },
+        "console": {
+          "score": 1,
+          "pass": true,
+          "advisory": false,
+          "f0": "0 v2-introduced errors (baseline=0, benign filtered=0, v2 total=0)"
+        },
+        "visual": {
+          "score": 0.818,
+          "pass": false,
+          "advisory": true,
+          "f0": "pixel similarity=0.818"
+        },
+        "a11y": {
+          "score": 1,
+          "pass": true,
+          "advisory": true,
+          "f0": "heading-order:1 heading-level skips"
+        }
+      }
+    },
+    {
+      "name": "et-storytelling-masterclass",
+      "ok": true,
+      "gate": true,
+      "failed": [],
+      "irOk": true,
+      "sections": 19,
+      "perf": {
+        "captureMs": 18763,
+        "capturePlusMs": 31079,
+        "graphMs": 203,
+        "generateMs": 7,
+        "verifyMs": 11023,
+        "peakRssMb": 99,
+        "dgNodes": 1363,
+        "dgEdges": 1170,
+        "bgNodes": 21,
+        "bgEdges": 14,
+        "totalMs": 61075
+      },
+      "scores": {
+        "sectionPartition": {
+          "score": 1,
+          "pass": true,
+          "advisory": false,
+          "f0": "coverage=100.00% overlap=0.00%"
+        },
+        "domStructure": {
+          "score": 0.999,
+          "pass": true,
+          "advisory": false,
+          "f0": "tagCosine=0.999"
+        },
+        "cssFidelity": {
+          "score": 0.996,
+          "pass": true,
+          "advisory": false,
+          "f0": "props matched 1617/1624 over 203 matched elements (unmatched orig=2 v2=0)"
+        },
+        "behavior": {
+          "score": 1,
+          "pass": true,
+          "advisory": false,
+          "f0": "no generate-controllers to drive"
+        },
+        "console": {
+          "score": 1,
+          "pass": true,
+          "advisory": false,
+          "f0": "0 v2-introduced errors (baseline=0, benign filtered=19, v2 total=19)"
+        },
+        "visual": {
+          "score": 0.814,
+          "pass": false,
+          "advisory": true,
+          "f0": "pixel similarity=0.814"
+        },
+        "a11y": {
+          "score": 1,
+          "pass": true,
+          "advisory": true,
+          "f0": "no violations"
+        }
+      }
+    },
+    {
+      "name": "gcc-leadership-masterclass",
+      "ok": true,
+      "gate": true,
+      "failed": [],
+      "irOk": true,
+      "sections": 20,
+      "perf": {
+        "captureMs": 16142,
+        "capturePlusMs": 8038,
+        "graphMs": 155,
+        "generateMs": 3,
+        "verifyMs": 12250,
+        "peakRssMb": 80,
+        "dgNodes": 1422,
+        "dgEdges": 1262,
+        "bgNodes": 16,
+        "bgEdges": 16,
+        "totalMs": 36588
+      },
+      "scores": {
+        "sectionPartition": {
+          "score": 1,
+          "pass": true,
+          "advisory": false,
+          "f0": "coverage=100.00% overlap=0.00%"
+        },
+        "domStructure": {
+          "score": 1,
+          "pass": true,
+          "advisory": false,
+          "f0": "tagCosine=0.999"
+        },
+        "cssFidelity": {
+          "score": 0.997,
+          "pass": true,
+          "advisory": false,
+          "f0": "props matched 1834/1840 over 230 matched elements (unmatched orig=0 v2=0)"
+        },
+        "behavior": {
+          "score": 1,
+          "pass": true,
+          "advisory": false,
+          "f0": "no generate-controllers to drive"
+        },
+        "console": {
+          "score": 1,
+          "pass": true,
+          "advisory": false,
+          "f0": "0 v2-introduced errors (baseline=0, benign filtered=0, v2 total=0)"
+        },
+        "visual": {
+          "score": 0.063,
+          "pass": false,
+          "advisory": true,
+          "f0": "pixel similarity=0.063"
+        },
+        "a11y": {
+          "score": 1,
+          "pass": true,
+          "advisory": true,
+          "f0": "no violations"
+        }
+      }
+    },
+    {
+      "name": "et-industry-leader",
+      "ok": true,
+      "gate": true,
+      "failed": [],
+      "irOk": true,
+      "sections": 21,
+      "perf": {
+        "captureMs": 24001,
+        "capturePlusMs": 18446,
+        "graphMs": 528,
+        "generateMs": 22,
+        "verifyMs": 9904,
+        "peakRssMb": 92,
+        "dgNodes": 1229,
+        "dgEdges": 950,
+        "bgNodes": 18,
+        "bgEdges": 13,
+        "totalMs": 52901
+      },
+      "scores": {
+        "sectionPartition": {
+          "score": 1,
+          "pass": true,
+          "advisory": false,
+          "f0": "coverage=100.00% overlap=0.00%"
+        },
+        "domStructure": {
+          "score": 0.996,
+          "pass": true,
+          "advisory": false,
+          "f0": "tagCosine=0.995"
+        },
+        "cssFidelity": {
+          "score": 0.998,
+          "pass": true,
+          "advisory": false,
+          "f0": "props matched 3203/3208 over 401 matched elements (unmatched orig=70 v2=100)"
+        },
+        "behavior": {
+          "score": 1,
+          "pass": true,
+          "advisory": false,
+          "f0": "tab switch OK (10→01)"
+        },
+        "console": {
+          "score": 1,
+          "pass": true,
+          "advisory": false,
+          "f0": "0 v2-introduced errors (baseline=0, benign filtered=0, v2 total=0)"
+        },
+        "visual": {
+          "score": 0.733,
+          "pass": false,
+          "advisory": true,
+          "f0": "pixel similarity=0.733"
+        },
+        "a11y": {
+          "score": 1,
+          "pass": true,
+          "advisory": true,
+          "f0": "no violations"
+        }
+      }
+    },
+    {
+      "name": "etauto-retail-refined",
+      "ok": true,
+      "gate": true,
+      "failed": [],
+      "irOk": true,
+      "sections": 20,
+      "perf": {
+        "captureMs": 15709,
+        "capturePlusMs": 16810,
+        "graphMs": 268,
+        "generateMs": 10,
+        "verifyMs": 10032,
+        "peakRssMb": 102,
+        "dgNodes": 1218,
+        "dgEdges": 928,
+        "bgNodes": 28,
+        "bgEdges": 23,
+        "totalMs": 42829
+      },
+      "scores": {
+        "sectionPartition": {
+          "score": 1,
+          "pass": true,
+          "advisory": false,
+          "f0": "coverage=100.00% overlap=0.00%"
+        },
+        "domStructure": {
+          "score": 0.989,
+          "pass": true,
+          "advisory": false,
+          "f0": "tagCosine=0.989"
+        },
+        "cssFidelity": {
+          "score": 0.997,
+          "pass": true,
+          "advisory": false,
+          "f0": "props matched 2745/2752 over 344 matched elements (unmatched orig=1 v2=58)"
+        },
+        "behavior": {
+          "score": 1,
+          "pass": true,
+          "advisory": false,
+          "f0": "tab switch OK (1000000→0100000)"
+        },
+        "console": {
+          "score": 1,
+          "pass": true,
+          "advisory": false,
+          "f0": "0 v2-introduced errors (baseline=0, benign filtered=0, v2 total=0)"
+        },
+        "visual": {
+          "score": 0.897,
+          "pass": true,
+          "advisory": true,
+          "f0": "pixel similarity=0.897"
+        },
+        "a11y": {
+          "score": 1,
+          "pass": true,
+          "advisory": true,
+          "f0": "no violations"
+        }
+      }
+    },
+    {
+      "name": "etauto-summit-forge",
+      "ok": true,
+      "gate": true,
+      "failed": [],
+      "irOk": true,
+      "sections": 21,
+      "perf": {
+        "captureMs": 16845,
+        "capturePlusMs": 17652,
+        "graphMs": 319,
+        "generateMs": 15,
+        "verifyMs": 12400,
+        "peakRssMb": 128,
+        "dgNodes": 1476,
+        "dgEdges": 1242,
+        "bgNodes": 12,
+        "bgEdges": 8,
+        "totalMs": 47231
+      },
+      "scores": {
+        "sectionPartition": {
+          "score": 1,
+          "pass": true,
+          "advisory": false,
+          "f0": "coverage=100.00% overlap=0.00%"
+        },
+        "domStructure": {
+          "score": 0.999,
+          "pass": true,
+          "advisory": false,
+          "f0": "tagCosine=0.999"
+        },
+        "cssFidelity": {
+          "score": 0.998,
+          "pass": true,
+          "advisory": false,
+          "f0": "props matched 3033/3040 over 380 matched elements (unmatched orig=38 v2=53)"
+        },
+        "behavior": {
+          "score": 1,
+          "pass": true,
+          "advisory": false,
+          "f0": "no generate-controllers to drive"
+        },
+        "console": {
+          "score": 1,
+          "pass": true,
+          "advisory": false,
+          "f0": "0 v2-introduced errors (baseline=0, benign filtered=0, v2 total=0)"
+        },
+        "visual": {
+          "score": 0.852,
+          "pass": true,
+          "advisory": true,
+          "f0": "pixel similarity=0.852"
+        },
+        "a11y": {
+          "score": 1,
+          "pass": true,
+          "advisory": true,
+          "f0": "aria-ref:1 dangling aria id refs"
+        }
+      }
+    },
+    {
+      "name": "ai-women-revolution",
+      "ok": true,
+      "gate": true,
+      "failed": [],
+      "irOk": true,
+      "sections": 17,
+      "perf": {
+        "captureMs": 13648,
+        "capturePlusMs": 6468,
+        "graphMs": 186,
+        "generateMs": 7,
+        "verifyMs": 10369,
+        "peakRssMb": 139,
+        "dgNodes": 1169,
+        "dgEdges": 1022,
+        "bgNodes": 6,
+        "bgEdges": 6,
+        "totalMs": 30678
+      },
+      "scores": {
+        "sectionPartition": {
+          "score": 1,
+          "pass": true,
+          "advisory": false,
+          "f0": "coverage=100.00% overlap=0.00%"
+        },
+        "domStructure": {
+          "score": 0.999,
+          "pass": true,
+          "advisory": false,
+          "f0": "tagCosine=0.999"
+        },
+        "cssFidelity": {
+          "score": 0.998,
+          "pass": true,
+          "advisory": false,
+          "f0": "props matched 1973/1976 over 247 matched elements (unmatched orig=0 v2=0)"
+        },
+        "behavior": {
+          "score": 1,
+          "pass": true,
+          "advisory": false,
+          "f0": "no generate-controllers to drive"
+        },
+        "console": {
+          "score": 1,
+          "pass": true,
+          "advisory": false,
+          "f0": "0 v2-introduced errors (baseline=1, benign filtered=0, v2 total=0)"
+        },
+        "visual": {
+          "score": 0.882,
+          "pass": true,
+          "advisory": true,
+          "f0": "pixel similarity=0.882"
+        },
+        "a11y": {
+          "score": 1,
+          "pass": true,
+          "advisory": true,
+          "f0": "heading-order:2 heading-level skips"
+        }
+      }
+    },
+    {
+      "name": "elite-landing-alchemy",
+      "ok": true,
+      "gate": true,
+      "failed": [],
+      "irOk": true,
+      "sections": 21,
+      "perf": {
+        "captureMs": 17543,
+        "capturePlusMs": 17730,
+        "graphMs": 160,
+        "generateMs": 5,
+        "verifyMs": 12639,
+        "peakRssMb": 138,
+        "dgNodes": 1136,
+        "dgEdges": 989,
+        "bgNodes": 13,
+        "bgEdges": 12,
+        "totalMs": 48077
+      },
+      "scores": {
+        "sectionPartition": {
+          "score": 1,
+          "pass": true,
+          "advisory": false,
+          "f0": "coverage=100.00% overlap=0.00%"
+        },
+        "domStructure": {
+          "score": 0.991,
+          "pass": true,
+          "advisory": false,
+          "f0": "tagCosine=0.995"
+        },
+        "cssFidelity": {
+          "score": 0.999,
+          "pass": true,
+          "advisory": false,
+          "f0": "props matched 1654/1656 over 207 matched elements (unmatched orig=0 v2=25)"
+        },
+        "behavior": {
+          "score": 1,
+          "pass": true,
+          "advisory": false,
+          "f0": "tab switch OK (100000→010000)"
+        },
+        "console": {
+          "score": 1,
+          "pass": true,
+          "advisory": false,
+          "f0": "0 v2-introduced errors (baseline=1, benign filtered=0, v2 total=0)"
+        },
+        "visual": {
+          "score": 0.869,
+          "pass": true,
+          "advisory": true,
+          "f0": "pixel similarity=0.869"
+        },
+        "a11y": {
+          "score": 1,
+          "pass": true,
+          "advisory": true,
+          "f0": "no violations"
+        }
+      }
+    },
+    {
+      "name": "eng-lead-pro",
+      "ok": true,
+      "gate": true,
+      "failed": [],
+      "irOk": true,
+      "sections": 22,
+      "perf": {
+        "captureMs": 19549,
+        "capturePlusMs": 12438,
+        "graphMs": 93,
+        "generateMs": 4,
+        "verifyMs": 10260,
+        "peakRssMb": 84,
+        "dgNodes": 1315,
+        "dgEdges": 1122,
+        "bgNodes": 6,
+        "bgEdges": 5,
+        "totalMs": 42344
+      },
+      "scores": {
+        "sectionPartition": {
+          "score": 1,
+          "pass": true,
+          "advisory": false,
+          "f0": "coverage=100.00% overlap=0.00%"
+        },
+        "domStructure": {
+          "score": 0.999,
+          "pass": true,
+          "advisory": false,
+          "f0": "tagCosine=0.997"
+        },
+        "cssFidelity": {
+          "score": 0.996,
+          "pass": true,
+          "advisory": false,
+          "f0": "props matched 1498/1504 over 188 matched elements (unmatched orig=1 v2=25)"
+        },
+        "behavior": {
+          "score": 1,
+          "pass": true,
+          "advisory": false,
+          "f0": "no generate-controllers to drive"
+        },
+        "console": {
+          "score": 1,
+          "pass": true,
+          "advisory": false,
+          "f0": "0 v2-introduced errors (baseline=1, benign filtered=0, v2 total=0)"
+        },
+        "visual": {
+          "score": 0.898,
+          "pass": true,
+          "advisory": true,
+          "f0": "pixel similarity=0.898"
+        },
+        "a11y": {
+          "score": 1,
+          "pass": true,
+          "advisory": true,
+          "f0": "no violations"
+        }
+      }
+    },
+    {
+      "name": "flowforge-pixel-premium",
+      "ok": true,
+      "gate": false,
+      "failed": [
+        "cssFidelity"
+      ],
+      "irOk": true,
+      "sections": 14,
+      "perf": {
+        "captureMs": 15232,
+        "capturePlusMs": 6629,
+        "graphMs": 84,
+        "generateMs": 9,
+        "verifyMs": 7218,
+        "peakRssMb": 107,
+        "dgNodes": 1344,
+        "dgEdges": 735,
+        "bgNodes": 3,
+        "bgEdges": 2,
+        "totalMs": 29172
+      },
+      "scores": {
+        "sectionPartition": {
+          "score": 1,
+          "pass": true,
+          "advisory": false,
+          "f0": "coverage=100.00% overlap=0.00%"
+        },
+        "domStructure": {
+          "score": 0.999,
+          "pass": true,
+          "advisory": false,
+          "f0": "tagCosine=0.999"
+        },
+        "cssFidelity": {
+          "score": 0.804,
+          "pass": false,
+          "advisory": false,
+          "f0": "props matched 1331/1656 over 207 matched elements (unmatched orig=1 v2=1)"
+        },
+        "behavior": {
+          "score": 1,
+          "pass": true,
+          "advisory": false,
+          "f0": "no generate-controllers to drive"
+        },
+        "console": {
+          "score": 1,
+          "pass": true,
+          "advisory": false,
+          "f0": "0 v2-introduced errors (baseline=0, benign filtered=0, v2 total=0)"
+        },
+        "visual": {
+          "score": 0.865,
+          "pass": true,
+          "advisory": true,
+          "f0": "pixel similarity=0.865"
+        },
+        "a11y": {
+          "score": 0,
+          "pass": false,
+          "advisory": true,
+          "f0": "button-name:1 <button> without accessible name"
+        }
+      }
+    },
+    {
+      "name": "future-code-women",
+      "ok": true,
+      "gate": true,
+      "failed": [],
+      "irOk": true,
+      "sections": 43,
+      "perf": {
+        "captureMs": 22253,
+        "capturePlusMs": 18293,
+        "graphMs": 256,
+        "generateMs": 38,
+        "verifyMs": 9869,
+        "peakRssMb": 178,
+        "dgNodes": 1459,
+        "dgEdges": 1335,
+        "bgNodes": 125,
+        "bgEdges": 81,
+        "totalMs": 50709
+      },
+      "scores": {
+        "sectionPartition": {
+          "score": 1,
+          "pass": true,
+          "advisory": false,
+          "f0": "coverage=100.00% overlap=0.00%"
+        },
+        "domStructure": {
+          "score": 0.975,
+          "pass": true,
+          "advisory": false,
+          "f0": "tagCosine=0.996"
+        },
+        "cssFidelity": {
+          "score": 0.996,
+          "pass": true,
+          "advisory": false,
+          "f0": "props matched 3659/3672 over 459 matched elements (unmatched orig=6 v2=42)"
+        },
+        "behavior": {
+          "score": 1,
+          "pass": true,
+          "advisory": false,
+          "f0": "tab switch OK (100000→010000)"
+        },
+        "console": {
+          "score": 1,
+          "pass": true,
+          "advisory": false,
+          "f0": "0 v2-introduced errors (baseline=8, benign filtered=7, v2 total=7)"
+        },
+        "visual": {
+          "score": 0.827,
+          "pass": false,
+          "advisory": true,
+          "f0": "pixel similarity=0.827"
+        },
+        "a11y": {
+          "score": 1,
+          "pass": true,
+          "advisory": true,
+          "f0": "aria-ref:15 dangling aria id refs"
+        }
+      }
+    },
+    {
+      "name": "nova-ai-league",
+      "ok": true,
+      "gate": true,
+      "failed": [],
+      "irOk": true,
+      "sections": 19,
+      "perf": {
+        "captureMs": 16248,
+        "capturePlusMs": 15669,
+        "graphMs": 69,
+        "generateMs": 4,
+        "verifyMs": 11091,
+        "peakRssMb": 177,
+        "dgNodes": 1443,
+        "dgEdges": 1435,
+        "bgNodes": 33,
+        "bgEdges": 33,
+        "totalMs": 43081
+      },
+      "scores": {
+        "sectionPartition": {
+          "score": 1,
+          "pass": true,
+          "advisory": false,
+          "f0": "coverage=100.00% overlap=0.00%"
+        },
+        "domStructure": {
+          "score": 0.999,
+          "pass": true,
+          "advisory": false,
+          "f0": "tagCosine=0.999"
+        },
+        "cssFidelity": {
+          "score": 0.999,
+          "pass": true,
+          "advisory": false,
+          "f0": "props matched 2462/2464 over 308 matched elements (unmatched orig=0 v2=0)"
+        },
+        "behavior": {
+          "score": 1,
+          "pass": true,
+          "advisory": false,
+          "f0": "no generate-controllers to drive"
+        },
+        "console": {
+          "score": 1,
+          "pass": true,
+          "advisory": false,
+          "f0": "0 v2-introduced errors (baseline=1, benign filtered=0, v2 total=0)"
+        },
+        "visual": {
+          "score": 0.773,
+          "pass": false,
+          "advisory": true,
+          "f0": "pixel similarity=0.773"
+        },
+        "a11y": {
+          "score": 1,
+          "pass": true,
+          "advisory": true,
+          "f0": "no violations"
+        }
+      }
+    }
+  ],
+  "excluded": [
+    {
+      "url": "https://preview--shine-luxe.lovable.app",
+      "reason": "auth-gated login page (title=\"Login\"), renders no site content"
+    }
+  ]
+}

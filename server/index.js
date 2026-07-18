@@ -8,6 +8,7 @@ const { build } = require('./build');
 const { packageSite } = require('./package-site');
 const { parseFigmaUrl, fetchNode, exportImages, fetchSvgMarkup, fetchImageFills } = require('./figma-fetch');
 const figmaBuild = require('./figma-build');
+const { reconstructSvgMarkup } = require('./figma-generate');
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -73,7 +74,46 @@ app.post('/api/convert', requireApiKey, async (req, res) => {
   try {
     // 1) capture the rendered page + its own CSS model, 2) build clean output.
     const model = await captureSite(url);
-    const result = build(model);
+
+    // ── v2 pipeline (flag-gated) with automatic v1 fallback ─────────────────
+    // LOVABLE_PIPELINE_V2=1 runs the new IR-driven compiler; a fast deterministic
+    // gate (IR-valid + 100% section partition, no rendering) decides v2-vs-v1 per
+    // conversion. Any error or gate failure falls back to the frozen v1 build().
+    // Export modes: body.mode='pixel-perfect' → scoped isolation; body.lean → prune dead CSS.
+    let result;
+    let pipeline = 'v1';
+    const v2gate = { };
+    // v2 runs if the env flag is set OR the request opts in (body.pipeline='v2' / body.v2=true)
+    // — so it can be tested without env setup. Default remains v1.
+    const wantV2 = process.env.LOVABLE_PIPELINE_V2 === '1' || !!(req.body && (req.body.pipeline === 'v2' || req.body.v2 === true));
+    if (wantV2) {
+      try {
+        const { runV2 } = require('./pipeline/run-v2');
+        const v2 = await runV2(url, model, {
+          isolate: !!(req.body && (req.body.isolate === true || req.body.mode === 'pixel-perfect')),
+          pruneCss: !!(req.body && (req.body.pruneCss === true || req.body.lean === true)),
+          capturedAt: new Date().toISOString(),
+        });
+        Object.assign(v2gate, v2.gate);
+        if (v2.gate.pass) { result = v2.result; pipeline = 'v2'; }
+        else { console.warn('[v2] gate failed (coverage=' + v2.gate.coverage + ' overlap=' + v2.gate.overlap + ' irValid=' + v2.gate.irValid + ') — falling back to v1'); result = build(model); }
+      } catch (e) { console.error('[v2] pipeline error — falling back to v1:', e.message); result = build(model); }
+    } else {
+      result = build(model);
+    }
+
+    // ── Enhancer: var-completion (v1 only; flag-gated, additive, build.js untouched) ──
+    // Restores referenced-but-missing CSS custom-property definitions from the
+    // site's own values. v2 already emits :root verbatim so it needs none.
+    if (pipeline === 'v1' && process.env.LOVABLE_VAR_COMPLETION === '1') {
+      try {
+        const { completeVars } = require('./enhance/var-completion');
+        const enh = completeVars({ globalCss: result.globalCss, sections: result.sectionsDetailed, rootCss: model.rootCss });
+        result.globalCss = enh.globalCss;
+        if (result.css) result.css = completeVars({ globalCss: result.css, sections: [], rootCss: model.rootCss }).globalCss; // dev bundle too
+        result.enhancements = Object.assign({}, result.enhancements, { varCompletion: { restored: enh.restored, warnings: enh.warnings, danglingBefore: enh.danglingCount } });
+      } catch (e) { console.error('[var-completion] failed (skipping):', e.message); }
+    }
 
     // DEVELOPER mode: assemble + write the bundle (index.html/styles.css/
     // script.js + assets/) so it can be previewed at /preview/<slug>/.
@@ -84,6 +124,7 @@ app.post('/api/convert', requireApiKey, async (req, res) => {
       } catch (e) { console.error('[dev] packaging failed (returning in-memory bundle)', e); }
       return res.json({
         mode: 'developer',
+        pipeline,
         html: result.html,
         css: result.css,
         scripts: { 'script.js': result.js },
@@ -91,6 +132,7 @@ app.post('/api/convert', requireApiKey, async (req, res) => {
         sections: result.sections,
         renderMode: 'headless',
         rootClass: 'et-scope',
+        ...(result.report ? { report: result.report } : {}),
         output: pkg ? { dir: pkg.dir, slug: pkg.slug, assets: pkg.assets } : null,
         // live preview URL served from the written bundle (assets + fonts intact)
         previewUrl: pkg ? `/preview/${pkg.slug}/` : null,
@@ -100,16 +142,19 @@ app.post('/api/convert', requireApiKey, async (req, res) => {
     // PRODUCTION mode: structured per-section output for the event-platform import.
     return res.json({
       mode: 'production',
+      pipeline,                             // 'v1' (frozen) or 'v2' (IR-driven)
       title: model.title || result.sectionsSummary || 'Converted Page',
       url,
       sections: result.sectionsDetailed,   // [{ key, label, tag, html, css, js, preview, htmlBytes, hasImages }]
       globalCss: result.globalCss,
       globalJs: result.globalJs,
       fontLinks: result.fontLinks,          // external font <link>s (also @import-ed into globalCss)
-      // Each section's html ALREADY carries class="et-scope", so the scoped
-      // globalCss applies to every section on its own — no wrapper required.
+      // both pipelines scope every section under .et-scope (self-contained per section).
       rootClass: 'et-scope',
       sectionsSummary: result.sectionsSummary,
+      ...(result.enhancements ? { enhancements: result.enhancements } : {}),
+      ...(result.report ? { report: result.report } : {}),
+      ...(pipeline === 'v2' ? { gate: v2gate } : {}),
     });
   } catch (err) {
     console.error('[convert] error for', url, '\n', err);
@@ -132,11 +177,19 @@ app.post('/api/figma/convert', async (req, res) => {
   }
   try {
     const { fileKey, nodeId } = parseFigmaUrl(url);
-    const { document, name } = await fetchNode(fileKey, nodeId, auth);
+    const { document, name } = await fetchNode(fileKey, nodeId, auth); // 1 REST call (cached forever)
     const a = figmaBuild.analyze(document);
-    const imageFillUrls = await fetchImageFills(fileKey, auth);       // photos, one call
-    const imageUrls = await exportImages(fileKey, a.imageNodeIds, 'png', auth, 2); // only fills without a ref
-    const svgMarkup = await fetchSvgMarkup(fileKey, a.svgNodeIds, auth); // icons
+    // Icons are reconstructed LOCALLY from geometry=paths — no /images render calls.
+    const svgMarkup = reconstructSvgMarkup(a.svgNodes);
+    // Lazy fallback: render via /images ONLY the vectors local reconstruction
+    // couldn't produce (e.g. a node fetched before geometry=paths, or an
+    // un-pathable node). In the common case this list is empty → zero render calls.
+    const missingSvg = a.svgNodeIds.filter((id) => !svgMarkup[id]);
+    if (missingSvg.length) Object.assign(svgMarkup, await fetchSvgMarkup(fileKey, missingSvg, auth));
+    const imageFillUrls = await fetchImageFills(fileKey, auth);       // photos: 1 cheap call (imageRef→S3 URL)
+    // Only render fills that genuinely lack an imageRef (rare); vectors never hit REST now.
+    const pngIds = a.imageNodeIds.filter((id) => !(a.svgNodes && a.svgNodes[id]));
+    const imageUrls = pngIds.length ? await exportImages(fileKey, pngIds, 'png', auth, 2) : {};
     const result = figmaBuild.emit(a.tree, { imageUrls, imageFillUrls, svgMarkup, title: name, fonts: a.fonts });
 
     // download only the asset URLs actually referenced in the output

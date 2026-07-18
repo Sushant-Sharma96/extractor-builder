@@ -24,9 +24,91 @@ function gradientCss(fill) {
   const stops = (fill.gradientStops || []).map((s) => `${figmaColor(s.color)} ${round(s.position * 100)}%`).join(', ');
   const h = fill.gradientHandlePositions || [];
   if (fill.type === 'GRADIENT_RADIAL' || fill.type === 'GRADIENT_DIAMOND') return `radial-gradient(${stops})`;
+  if (fill.type === 'GRADIENT_ANGULAR') {
+    let from = 0;
+    if (h.length >= 2) from = round(Math.atan2(h[1].x - h[0].x, -(h[1].y - h[0].y)) * 180 / Math.PI);
+    return `conic-gradient(from ${from}deg, ${stops})`;
+  }
+  // Linear. Figma handles are box-normalized, y-down; CSS angle is measured
+  // clockwise from "to top" (0deg = up, 90deg = right). Map the start→end vector
+  // accordingly (previous +90/atan2(dy,dx) form was ~90deg off on diagonals).
   let angle = 180;
-  if (h.length >= 2) angle = Math.round(Math.atan2(h[1].y - h[0].y, h[1].x - h[0].x) * 180 / Math.PI) + 90;
+  if (h.length >= 2) {
+    const dx = h[1].x - h[0].x, dy = h[1].y - h[0].y;
+    angle = round(((Math.atan2(dx, -dy) * 180 / Math.PI) % 360 + 360) % 360);
+  }
   return `linear-gradient(${angle}deg, ${stops})`;
+}
+
+// Image fill → CSS background sizing/position. In the REST API scaleMode:
+//   FILL  → cover ·  FIT → contain ·  TILE → repeat(scalingFactor) ·
+//   STRETCH+imageTransform → CROP (a 2×3 affine on normalised image coords;
+//   diagonal = scale, translation column = pan). Derive size/position from it.
+function imageFillCss(f) {
+  const m = f.scaleMode;
+  if (m === 'FIT') return { size: 'contain', position: 'center', repeat: 'no-repeat' };
+  if (m === 'TILE') { const s = f.scalingFactor || 1; return { size: `${round(s * 100)}%`, position: '0 0', repeat: 'repeat' }; }
+  if (m === 'STRETCH' && f.imageTransform) {
+    const t = f.imageTransform, a = t[0][0], e = t[1][1], cx = t[0][2], cy = t[1][2];
+    const sx = a ? 1 / a : 1, sy = e ? 1 / e : 1;
+    const posX = Math.abs(1 - a) > 1e-4 ? round((cx / (1 - a)) * 100) : 0;
+    const posY = Math.abs(1 - e) > 1e-4 ? round((cy / (1 - e)) * 100) : 0;
+    return { size: `${round(sx * 100)}% ${round(sy * 100)}%`, position: `${posX}% ${posY}%`, repeat: 'no-repeat' };
+  }
+  return { size: 'cover', position: 'center', repeat: 'no-repeat' }; // FILL (and any fallback)
+}
+
+// Composite ALL visible fills into stacked CSS backgrounds (Figma paints the
+// array bottom→top; CSS lists layers top→bottom, so we unshift). Returns a
+// background-color base plus aligned image/size/position/repeat layer lists.
+// Image layers emit a `__IMG__` sentinel that emit() swaps for the resolved url.
+function paintLayers(node, ctx) {
+  const fills = visibleFills(node);
+  const images = [], sizes = [], positions = [], repeats = [];
+  let color = null;
+  for (const f of fills) { // bottom → top
+    if (f.type === 'SOLID') {
+      const c = figmaColor(f.color, f.opacity);
+      if (images.length === 0) color = c;                    // bottom-most solid → base color
+      else { images.unshift(`linear-gradient(${c}, ${c})`); sizes.unshift('auto'); positions.unshift('0 0'); repeats.unshift('repeat'); } // solid over media → flat layer
+    } else if (f.type && f.type.startsWith('GRADIENT')) {
+      images.unshift(gradientCss(f)); sizes.unshift('auto'); positions.unshift('0 0'); repeats.unshift('no-repeat');
+    } else if (f.type === 'IMAGE') {
+      ctx.exportImage(node.id); ctx.bgImageNodes.add(node.id);
+      const g = imageFillCss(f);
+      images.unshift('__IMG__'); sizes.unshift(g.size); positions.unshift(g.position); repeats.unshift(g.repeat);
+    }
+  }
+  return { color, images, sizes, positions, repeats };
+}
+
+// Stroke → border. Honours strokeAlign (INSIDE=border with border-box; OUTSIDE=
+// outline so layout size is unaffected; CENTER≈border), individualStrokeWeights
+// (per-side rules — bottom-only dividers etc.), and dashes.
+function strokeCss(node, set) {
+  const strokes = (node.strokes || []).filter((s) => s.visible !== false);
+  if (!strokes.length) return;
+  const s0 = strokes[0];
+  const color = s0.type === 'SOLID' ? figmaColor(s0.color, s0.opacity) : null;
+  if (!color) return;
+  const style = (node.strokeDashes && node.strokeDashes.length) ? 'dashed' : 'solid';
+  const iw = node.individualStrokeWeights;
+  if (iw && (iw.top || iw.right || iw.bottom || iw.left)) {
+    set('border-style', style); set('border-color', color);
+    if (iw.top) set('border-top-width', px(iw.top));
+    if (iw.right) set('border-right-width', px(iw.right));
+    if (iw.bottom) set('border-bottom-width', px(iw.bottom));
+    if (iw.left) set('border-left-width', px(iw.left));
+    return;
+  }
+  if (!node.strokeWeight) return;
+  if (node.strokeAlign === 'OUTSIDE') {
+    // outline draws outside the box without affecting layout — matches Figma OUTSIDE
+    set('outline', `${px(node.strokeWeight)} ${style} ${color}`);
+  } else {
+    // INSIDE (with global box-sizing:border-box) and CENTER ≈ border
+    set('border', `${px(node.strokeWeight)} ${style} ${color}`);
+  }
 }
 
 // ---- node → declarations ----------------------------------------------------
@@ -78,34 +160,37 @@ function nodeDecls(node, parent, ctx) {
   // --- fills → background / color -------------------------------------------
   const fills = visibleFills(node);
   const isText = node.type === 'TEXT';
-  if (fills.length) {
+  if (fills.length && isText) {
+    // text uses the top fill: a solid colour, or a clipped gradient (gradient text)
     const top = fills[fills.length - 1];
-    if (top.type === 'SOLID') {
-      if (isText) set('color', figmaColor(top.color, top.opacity));
-      else set('background-color', figmaColor(top.color, top.opacity));
-    } else if (top.type && top.type.startsWith('GRADIENT')) {
-      if (isText) { set('background-image', gradientCss(top)); set('-webkit-background-clip', 'text'); set('background-clip', 'text'); set('color', 'transparent'); }
-      else set('background-image', gradientCss(top));
-    } else if (top.type === 'IMAGE') {
-      ctx.exportImage(node.id);
-      set('background-size', top.scaleMode === 'FIT' ? 'contain' : 'cover');
-      set('background-position', 'center');
-      set('background-repeat', 'no-repeat');
-      ctx.bgImageNodes.add(node.id); // resolved to url later
+    if (top.type === 'SOLID') set('color', figmaColor(top.color, top.opacity));
+    else if (top.type && top.type.startsWith('GRADIENT')) {
+      set('background-image', gradientCss(top)); set('-webkit-background-clip', 'text'); set('background-clip', 'text'); set('color', 'transparent');
+    }
+  } else if (fills.length) {
+    // every visible fill, composited as stacked CSS backgrounds (layered fills)
+    const p = paintLayers(node, ctx);
+    if (p.color) set('background-color', p.color);
+    if (p.images.length) {
+      set('background-image', p.images.join(', '));
+      set('background-size', p.sizes.join(', '));
+      set('background-position', p.positions.join(', '));
+      set('background-repeat', p.repeats.join(', '));
     }
   }
 
-  // --- strokes → border ------------------------------------------------------
-  const strokes = (node.strokes || []).filter((s) => s.visible !== false);
-  if (strokes.length && node.strokeWeight) {
-    const c = strokes[0].type === 'SOLID' ? figmaColor(strokes[0].color, strokes[0].opacity) : null;
-    if (c) set('border', `${px(node.strokeWeight)} solid ${c}`);
-  }
+  // --- strokes → border / outline -------------------------------------------
+  strokeCss(node, set);
 
   // --- corner radius ---------------------------------------------------------
-  if (Array.isArray(node.rectangleCornerRadii)) set('border-radius', node.rectangleCornerRadii.map(px).join(' '));
+  if (Array.isArray(node.rectangleCornerRadii) && node.rectangleCornerRadii.some((r) => r > 0)) set('border-radius', node.rectangleCornerRadii.map(px).join(' '));
   else if (node.cornerRadius) set('border-radius', px(node.cornerRadius));
   if (node.type === 'ELLIPSE') set('border-radius', '50%');
+
+  // --- clipping --------------------------------------------------------------
+  // Frames that clip their content in Figma (cards, avatar/photo crops, masked
+  // media) must hide overflow, or oversized image layers spill across the page.
+  if (node.clipsContent) set('overflow', 'hidden');
 
   // --- effects → shadow / blur ----------------------------------------------
   const effs = (node.effects || []).filter((e) => e.visible !== false);
@@ -120,11 +205,19 @@ function nodeDecls(node, parent, ctx) {
 
   if (node.opacity != null && node.opacity < 1) set('opacity', String(round(node.opacity)));
 
+  // --- blend mode ------------------------------------------------------------
+  const BLEND = { MULTIPLY: 'multiply', SCREEN: 'screen', OVERLAY: 'overlay', DARKEN: 'darken', LIGHTEN: 'lighten', COLOR_DODGE: 'color-dodge', COLOR_BURN: 'color-burn', HARD_LIGHT: 'hard-light', SOFT_LIGHT: 'soft-light', DIFFERENCE: 'difference', EXCLUSION: 'exclusion', HUE: 'hue', SATURATION: 'saturation', COLOR: 'color', LUMINOSITY: 'luminosity' };
+  if (BLEND[node.blendMode]) set('mix-blend-mode', BLEND[node.blendMode]);
+
+  // --- aspect ratio (media that preserves ratio) ----------------------------
+  if (node.preserveRatio && box.width && box.height) set('aspect-ratio', `${round(box.width)} / ${round(box.height)}`);
+
   // --- typography ------------------------------------------------------------
   if (isText && node.style) {
     const s = node.style;
     if (s.fontFamily) { set('font-family', `'${s.fontFamily}', sans-serif`); ctx.fonts.add(s.fontFamily); }
     if (s.fontWeight) set('font-weight', String(s.fontWeight));
+    if (s.italic || /italic|oblique/i.test(s.fontStyle || '')) set('font-style', 'italic');
     if (s.fontSize) set('font-size', px(s.fontSize));
     if (s.lineHeightPx) set('line-height', px(s.lineHeightPx));
     if (s.letterSpacing) set('letter-spacing', px(s.letterSpacing));
@@ -134,9 +227,54 @@ function nodeDecls(node, parent, ctx) {
     if (s.textDecoration === 'STRIKETHROUGH') set('text-decoration', 'line-through');
     const TC = { UPPER: 'uppercase', LOWER: 'lowercase', TITLE: 'capitalize' };
     if (TC[s.textCase]) set('text-transform', TC[s.textCase]);
+    // vertical alignment inside a fixed text box → flex column justification
+    const VA = { CENTER: 'center', BOTTOM: 'flex-end' };
+    if (VA[s.textAlignVertical]) { set('display', 'flex'); set('flex-direction', 'column'); set('justify-content', VA[s.textAlignVertical]); }
+    // truncation
+    if (node.textTruncation === 'ENDING' || s.textAutoResize === 'TRUNCATE') { set('overflow', 'hidden'); set('text-overflow', 'ellipsis'); }
   }
 
   return d;
 }
 
-module.exports = { nodeDecls, figmaColor, visibleFills };
+// Reconstruct a vector/icon node as inline SVG from its geometry — LOCALLY, with
+// ZERO REST calls. Figma returns fillGeometry/strokeGeometry (SVG path data) when
+// the file is fetched with `geometry=paths`; we wrap those paths in an <svg> sized
+// to the node box, painting fills/strokes from the node's own paints. This removes
+// the entire /images?format=svg render storm (the endpoint that causes the lock).
+function reconstructSvg(node) {
+  const b = node.absoluteBoundingBox || {};
+  const w = round(b.width || 0), h = round(b.height || 0);
+  if (!w || !h) return null;
+  const fillG = node.fillGeometry || [], strokeG = node.strokeGeometry || [];
+  if (!fillG.length && !strokeG.length) return null;
+  const fills = visibleFills(node);
+  const solid = fills.find((f) => f.type === 'SOLID');
+  const grad = fills.find((f) => f.type && f.type.startsWith('GRADIENT'));
+  const fillColor = solid ? figmaColor(solid.color, solid.opacity)
+    : (grad && grad.gradientStops && grad.gradientStops[0] ? figmaColor(grad.gradientStops[0].color) : 'currentColor');
+  const strokes = (node.strokes || []).filter((s) => s.visible !== false);
+  const strokeColor = strokes[0] && strokes[0].type === 'SOLID' ? figmaColor(strokes[0].color, strokes[0].opacity) : null;
+  const parts = [];
+  for (const g of fillG) {
+    const rule = g.windingRule === 'EVENODD' ? ' fill-rule="evenodd"' : '';
+    parts.push(`<path d="${g.path}" fill="${fillColor}"${rule}/>`);
+  }
+  for (const g of strokeG) {
+    parts.push(`<path d="${g.path}" fill="${strokeColor || fillColor}"/>`);
+  }
+  if (!parts.length) return null;
+  return `<svg width="${w}" height="${h}" viewBox="0 0 ${w} ${h}" fill="none" xmlns="http://www.w3.org/2000/svg">${parts.join('')}</svg>`;
+}
+
+// Build { nodeId: svgMarkup } for a map of vector nodes — local, no REST.
+function reconstructSvgMarkup(svgNodes) {
+  const out = {};
+  for (const id of Object.keys(svgNodes || {})) {
+    const svg = reconstructSvg(svgNodes[id]);
+    if (svg) out[id] = svg;
+  }
+  return out;
+}
+
+module.exports = { nodeDecls, figmaColor, visibleFills, reconstructSvg, reconstructSvgMarkup };

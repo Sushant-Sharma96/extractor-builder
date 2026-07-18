@@ -29,7 +29,7 @@ export default function App() {
         body: JSON.stringify(
           isFigma
             ? { url: fig, token: figmaToken.trim() || undefined }
-            : { url: lov, format: 'dev' },   // developer mode: assembled bundle + live preview
+            : { url: lov, format: 'dev' },   // developer mode (v1 semantic pipeline) + live preview
         ),
       });
       const data = await res.json();
@@ -136,6 +136,11 @@ export default function App() {
               </>
             )}
             <span className="spacer" />
+            {result.pipeline && (
+              <span className="render-mode" style={{ marginRight: 12, fontWeight: 700, color: result.pipeline === 'v2' ? '#4ade80' : '#f59e0b' }}>
+                pipeline: {result.pipeline}
+              </span>
+            )}
             <span className="render-mode">
               rendered via {result.renderMode === 'headless' ? 'headless browser' : 'direct fetch'}
             </span>
