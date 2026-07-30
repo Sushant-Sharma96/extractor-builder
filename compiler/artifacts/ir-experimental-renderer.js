@@ -179,6 +179,112 @@ function computeFreeformFlowSafety(members, axis, containerBox) {
  * case.
  */
 /**
+ * NDG's own structural collapse (compiler/ndg/build.js, Pass 3) can delete a
+ * wrapper node and promote its single child to take its place in the graph
+ * — correct and desirable when the wrapper is genuinely meaningless, but a
+ * real bug when a SEPARATE, NDG-bypassing system (server/figma-generate.js's
+ * SVG icon reconstruction, or a legacy imageUrls lookup) already computed
+ * its output keyed by that wrapper's ORIGINAL id. Confirmed via a real
+ * fixture: an icon built from exactly one vector shape (as opposed to 2+)
+ * has its wrapping "SVG" frame collapsed away by Pass 3 (no paint signal of
+ * its own, exactly one child) — svgMarkup, keyed by the frame's pre-collapse
+ * id, then silently misses on every lookup, since the renderer only ever
+ * sees the survivor's id (and, as a visible side effect, whatever DOES
+ * render in its place uses the child's own tighter/offset box instead of
+ * the original wrapper's, which is what looked like a misalignment).
+ *
+ * This treats NDG's own collapse record (`events`) as authoritative and
+ * re-keys any pre-collapse id in a lookup table to whichever id actually
+ * survived — including chained collapses (a collapsed wrapper's own
+ * replacement can itself be collapsed again) — rather than teaching NDG
+ * about the legacy SVG-reconstruction heuristics, which would recreate the
+ * exact "two systems quietly depending on each other's internals" problem
+ * this is fixing.
+ * @param {object} bySourceId — e.g. svgMarkup/imageUrls, keyed by raw Figma node id
+ * @param {Array<{type:string, sourceNodeId?:string, replacedBy?:string}>} events
+ * @returns {object} a same-shape object, re-keyed wherever NDG collapsed the original id
+ */
+function rekeyForNdgCollapse(bySourceId, events) {
+  if (!bySourceId || !Object.keys(bySourceId).length) return bySourceId || {};
+  const replacedBy = new Map();
+  for (const ev of events || []) {
+    if (ev && ev.type === 'collapsed' && ev.sourceNodeId && ev.replacedBy) {
+      replacedBy.set(ev.sourceNodeId, ev.replacedBy);
+    }
+  }
+  if (!replacedBy.size) return bySourceId;
+  function resolve(id) {
+    let current = id;
+    const seen = new Set();
+    while (replacedBy.has(current) && !seen.has(current)) {
+      seen.add(current);
+      current = replacedBy.get(current);
+    }
+    return current;
+  }
+  const out = {};
+  for (const [id, value] of Object.entries(bySourceId)) {
+    out[resolve(id)] = value;
+  }
+  return out;
+}
+
+/** Walks a raw Figma document tree once, indexing every node by its own raw id. */
+function indexRawNodesById(root) {
+  const byId = new Map();
+  function walk(n) {
+    if (!n) return;
+    if (n.id != null) byId.set(String(n.id), n);
+    for (const c of n.children || []) walk(c);
+  }
+  walk(root);
+  return byId;
+}
+
+/**
+ * When NDG collapses a wrapper into its single child (see
+ * rekeyForNdgCollapse's comment) and that child ends up rendered via
+ * reconstructed SVG, the child's OWN (tighter, differently-offset) box is
+ * not what should size/position the icon — the wrapper's box is (e.g. a
+ * consistent 24x24 icon-container every sibling icon whose own wrapper
+ * survived collapse already uses). Confirmed via a real fixture: a
+ * single-vector icon rendered 20x20 at a visibly different offset than its
+ * five 24x24 siblings once the missing-markup bug above was fixed — same
+ * root cause, one layer deeper. Returns nodeId -> the ORIGINAL wrapper's raw
+ * absoluteBoundingBox, only for collapses that actually happened.
+ * @param {Array<{type:string, sourceNodeId?:string, replacedBy?:string}>} events
+ * @param {Map<string,object>} rawNodesById
+ * @returns {Map<string,object>} survivor sourceNodeId -> original wrapper's absoluteBoundingBox
+ */
+function collapsedWrapperBoxBySurvivorId(events, rawNodesById) {
+  const out = new Map();
+  for (const ev of events || []) {
+    if (!ev || ev.type !== 'collapsed' || !ev.sourceNodeId || !ev.replacedBy) continue;
+    const originalRaw = rawNodesById.get(ev.sourceNodeId);
+    if (originalRaw && originalRaw.absoluteBoundingBox) {
+      out.set(ev.replacedBy, originalRaw.absoluteBoundingBox);
+    }
+  }
+  return out;
+}
+
+/**
+ * Figma's own `gridColumnsSizing`/`gridRowsSizing` strings (native Grid Auto
+ * Layout, see ingest.js's comment) are already valid CSS grid-template-
+ * columns/rows syntax verbatim (e.g. "repeat(3,minmax(0,1fr))") — this only
+ * guards against interpolating anything outside a safe grid-track character
+ * set into generated CSS before trusting the string as-is.
+ * @param {*} value
+ * @returns {string|null}
+ */
+function sanitizeGridTrackString(value) {
+  if (typeof value !== 'string') return null;
+  const trimmed = value.trim();
+  if (!trimmed || !/^[a-zA-Z0-9.,()%\s-]+$/.test(trimmed)) return null;
+  return trimmed;
+}
+
+/**
  * Image-fill resolution — mirrors legacy's `imageRefOf()`/`imgUrl()`
  * (server/figma-build.js) which treats ANY node carrying an `IMAGE`-type
  * fill paint as an image, regardless of the node's own Figma `type`
@@ -382,9 +488,7 @@ async function renderIrExperimental(document, opts = {}) {
   if (!document) {
     throw new Error('renderIrExperimental requires document');
   }
-  const imageUrls = opts.imageUrls || {};
   const imageFillUrls = opts.imageFillUrls || {};
-  const svgMarkup = opts.svgMarkup || {};
   const graphId = opts.graphId || `g:ir-experimental:${Date.now()}`;
   const ws = createWorkspace();
   const ndg = await materializeNormalizedDesignGraph({
@@ -394,6 +498,19 @@ async function renderIrExperimental(document, opts = {}) {
     graphId,
   });
   const graph = ndg.graph;
+  // `imageUrls`/`svgMarkup` are keyed by raw Figma node id, but built by
+  // legacy, NDG-bypassing code (server/figma-generate.js's SVG icon
+  // reconstruction) that has no idea NDG might collapse the exact node that
+  // id refers to — re-key using NDG's own collapse record so a lookup by
+  // the post-collapse survivor id still finds it. See rekeyForNdgCollapse's
+  // own header comment for the full root-cause explanation.
+  const imageUrls = rekeyForNdgCollapse(opts.imageUrls || {}, ndg.events);
+  const svgMarkup = rekeyForNdgCollapse(opts.svgMarkup || {}, ndg.events);
+  // See collapsedWrapperBoxBySurvivorId's own comment: the collapsed
+  // wrapper's ORIGINAL box (not the promoted child's own, tighter one) is
+  // what should size/position an icon rendered via reconstructed SVG.
+  const rawNodesById = indexRawNodesById(document);
+  const collapsedWrapperBoxByNodeId = collapsedWrapperBoxBySurvivorId(ndg.events, rawNodesById);
   const index = indexGraph(graph);
   const detectedGeometry = detectGeometry(graph, {});
   const interpretations = interpretGraph(graph, index, {
@@ -585,6 +702,21 @@ async function renderIrExperimental(document, opts = {}) {
     const isFreeformChromeHidden = freeformChromeHiddenByNodeId.has(node.id);
     const isFreeformGridItem = freeformGridItemIds.has(node.id);
     const freeformPlacement = freeformPlacementByNodeId.get(node.id);
+    // Native Figma Grid Auto Layout (layoutMode:'GRID') — a real declared
+    // layout, confirmed via a real fixture to previously fall through to
+    // unstyled block flow because nothing recognized it at all:
+    // layout/interpret.js's sourceFlowMode only checks HORIZONTAL/VERTICAL
+    // (a narrower, separate gap from this one), so this is resolved
+    // directly here instead of relying on that path. See ingest.js's
+    // comment for why the child-placement fields need no clustering, only
+    // reading — Figma already gives every child an explicit 0-based
+    // row/column anchor + span.
+    const nodeAttrs = node.attributes || {};
+    const isRealGridContainer = String(nodeAttrs.layoutMode || '').toUpperCase() === 'GRID';
+    const parentIsRealGrid = String((parentAttrs && parentAttrs.layoutMode) || '').toUpperCase() === 'GRID';
+    const hasRealGridPlacement = parentIsRealGrid
+      && nodeAttrs.gridRowAnchorIndex != null
+      && nodeAttrs.gridColumnAnchorIndex != null;
     // Image-fill resolution — see imageRefOf()'s header comment above. Only
     // considered for non-TEXT nodes: a TEXT node's own paint is its font
     // color (see the isText flag below / css-declarations.js's modeDecls()),
@@ -605,6 +737,15 @@ async function renderIrExperimental(document, opts = {}) {
     const imageSrc = imageRef
       ? ((imageFillUrls[imageRef]) || imageUrls[node.sourceNodeId] || '')
       : (svgForNode ? `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svgForNode)}` : '');
+    // See collapsedWrapperBoxBySurvivorId's own comment: use the collapsed
+    // wrapper's ORIGINAL box (a consistent icon-container size/position, e.g.
+    // 24x24) instead of this node's own tighter/differently-offset one, but
+    // only when this node is actually the thing standing in for that
+    // wrapper (svgForNode) — an ordinary node that merely happens to have
+    // been some other unrelated wrapper's sole child keeps its own real box.
+    const effectiveBox = (svgForNode && collapsedWrapperBoxByNodeId.has(node.sourceNodeId))
+      ? collapsedWrapperBoxByNodeId.get(node.sourceNodeId)
+      : node.box;
     // A recognized row-set row must stack at its OWN real y-position, not
     // wherever its raw graph/layer order happens to place it in document
     // flow — real-fixture validation (Challenge Arena) showed the table's
@@ -633,7 +774,14 @@ async function renderIrExperimental(document, opts = {}) {
     // forcing, not an additional case added to it.
     const isFlowSafeFreeformMember = freeformMemberFact && freeformFlowSafeMemberIds.has(node.id);
     const forcedAbsoluteFreeformMember = !!freeformMemberFact && !isFlowSafeFreeformMember;
-    let resolvedMode = (forcedAbsoluteRow || forcedAbsoluteFreeformMember) ? 'absolute' : (top ? top.mode : 'unknown');
+    // A real declared Grid Auto Layout wins over every guessed mode, the
+    // same way a real HORIZONTAL/VERTICAL layoutMode already does via
+    // sourceFlowMode's 0.85 score in layout/interpret.js — checked first,
+    // unconditionally, since this is Figma's own explicit answer, not an
+    // inference to weigh against others.
+    let resolvedMode = isRealGridContainer
+      ? 'grid-real'
+      : (forcedAbsoluteRow || forcedAbsoluteFreeformMember) ? 'absolute' : (top ? top.mode : 'unknown');
     // A freeform-layout-ir column leaf (already reliably identified — it
     // resolved as a repeating-group column in detect.js) is a small
     // icon+text-style wrapper whose own children MUST lay out side-by-side/
@@ -681,15 +829,27 @@ async function renderIrExperimental(document, opts = {}) {
       // buildDecls()'s overlay() replaces-by-key, never duplicates, so a
       // more specific cardFact/freeformLeafCornerRadius value applied later
       // still correctly wins over this generic one for the same node.
-      cornerRadius: Number.isFinite(node.geometry && node.geometry.cornerRadius)
+      // Every generic shape decoration below (corner-radius, stroke) is
+      // suppressed when this node is being rendered via reconstructed SVG
+      // markup (`svgForNode`, set above): `reconstructSvg()` already paints
+      // this exact node's own fill/stroke as part of the SVG path data
+      // itself, so a SEPARATE CSS border/outline on top of the `<img>`
+      // would be pure duplication — confirmed as a real, visible bug (a
+      // stray green outline around an otherwise-correct icon) on the one
+      // real fixture where NDG's own structural collapse (see
+      // rekeyForNdgCollapse's comment) promotes a stroked VECTOR leaf
+      // directly into the render tree, something that never happens for a
+      // multi-vector icon (its wrapping frame — which has no stroke of its
+      // own — survives collapse instead).
+      cornerRadius: (!svgForNode && Number.isFinite(node.geometry && node.geometry.cornerRadius))
         ? node.geometry.cornerRadius
         : null,
       // Unlike `paints` (top-level on the graph node, compiler/ndg/build.js),
       // `strokes` is nested under `attributes.strokes` there — verified
       // directly (a synthetic-shaped `node.strokes` read came back
       // `undefined` for a real Figma node with real, confirmed stroke data).
-      strokeCss: solidFillCss(node.attributes && node.attributes.strokes),
-      strokeWeight: Number.isFinite(node.geometry && node.geometry.strokeWeight)
+      strokeCss: svgForNode ? null : solidFillCss(node.attributes && node.attributes.strokes),
+      strokeWeight: (!svgForNode && Number.isFinite(node.geometry && node.geometry.strokeWeight))
         ? node.geometry.strokeWeight
         : null,
       // CENTER/OUTSIDE stroke alignment (real-data audit: 244 of 290 real
@@ -697,10 +857,10 @@ async function renderIrExperimental(document, opts = {}) {
       // always sits fully inside the box (matches Figma's INSIDE align
       // only); modeDecls() reads this to switch to `outline` (which
       // supports a configurable `outline-offset`) for the other two.
-      strokeAlign: (node.geometry && node.geometry.strokeAlign) || null,
+      strokeAlign: svgForNode ? null : ((node.geometry && node.geometry.strokeAlign) || null),
       // Real, per-side stroke widths (e.g. a border-bottom-only divider) —
       // when present, wins over the single uniform `strokeWeight` above.
-      individualStrokeWeights: (node.geometry && node.geometry.individualStrokeWeights) || null,
+      individualStrokeWeights: svgForNode ? null : ((node.geometry && node.geometry.individualStrokeWeights) || null),
       // Real per-node clip flag (Figma's `clipsContent`) — previously always
       // false on real data because it was read via the wrong field
       // (`attributes.overflow`, sourced from `overflowDirection`, a
@@ -718,6 +878,32 @@ async function renderIrExperimental(document, opts = {}) {
       // strokeCss()) rather than attempting exact dash/gap lengths (which
       // plain CSS borders can't express anyway).
       strokeDashes: (node.geometry && node.geometry.strokeDashes) || null,
+      // Native Figma Grid Auto Layout — see this function's own comment on
+      // isRealGridContainer/hasRealGridPlacement above. gridColumnsTemplate/
+      // gridRowsTemplate carry Figma's own near-literal CSS track strings
+      // when present and safe to trust verbatim (sanitizeGridTrackString);
+      // gridColumnCount/gridRowCount survive as a plain-integer fallback
+      // for modeDecls() to build an equivalent repeat(N, ...) track list
+      // when the sizing string is absent or fails sanitization.
+      gridColumnCount: (isRealGridContainer && Number.isFinite(nodeAttrs.gridColumnCount))
+        ? nodeAttrs.gridColumnCount : null,
+      gridRowCount: (isRealGridContainer && Number.isFinite(nodeAttrs.gridRowCount))
+        ? nodeAttrs.gridRowCount : null,
+      gridColumnsTemplate: isRealGridContainer ? sanitizeGridTrackString(nodeAttrs.gridColumnsSizing) : null,
+      gridRowsTemplate: isRealGridContainer ? sanitizeGridTrackString(nodeAttrs.gridRowsSizing) : null,
+      gridRowGap: (isRealGridContainer && Number.isFinite(nodeAttrs.gridRowGap)) ? nodeAttrs.gridRowGap : null,
+      gridColumnGap: (isRealGridContainer && Number.isFinite(nodeAttrs.gridColumnGap)) ? nodeAttrs.gridColumnGap : null,
+      // Explicit 1-based grid-row/grid-column placement for a child of a
+      // real Grid Auto Layout container — sourced directly from Figma's own
+      // 0-based anchor + span, never inferred from document order (which,
+      // per this file's other recognized-group comments, is not guaranteed
+      // to match visual order anyway).
+      gridPlacement: hasRealGridPlacement ? {
+        rowStart: nodeAttrs.gridRowAnchorIndex + 1,
+        rowSpan: Number.isFinite(nodeAttrs.gridRowSpan) && nodeAttrs.gridRowSpan > 0 ? nodeAttrs.gridRowSpan : 1,
+        colStart: nodeAttrs.gridColumnAnchorIndex + 1,
+        colSpan: Number.isFinite(nodeAttrs.gridColumnSpan) && nodeAttrs.gridColumnSpan > 0 ? nodeAttrs.gridColumnSpan : 1,
+      } : null,
       // A full fill/gradient result ({prop,value}) — see css-declarations.js's
       // paintCss() — kept SEPARATE from the plain-string `fillCss` above
       // (used for TEXT color and the root canvas background, neither of
@@ -830,13 +1016,14 @@ async function renderIrExperimental(document, opts = {}) {
     const isDisplayContentsPassthrough = isRowSetPassthrough || isFreeformPassthrough;
     const parentHasAutoLayout = !!(parentAttrs && parentAttrs.layoutMode);
     if (
-      (mode === 'absolute' || mode === 'unknown' || !parentHasAutoLayout) && node.box && parentBox
+      (mode === 'absolute' || mode === 'unknown' || !parentHasAutoLayout) && effectiveBox && parentBox
       && !isRowSetGridItem && !isFreeformGridItem && !isDisplayContentsPassthrough && !isFlowSafeFreeformMember
+      && !hasRealGridPlacement
     ) {
-      layoutChoice.left = node.box.x - parentBox.x;
-      layoutChoice.top = node.box.y - parentBox.y;
-      if (Number.isFinite(node.box.width)) layoutChoice.width = node.box.width;
-      if (Number.isFinite(node.box.height)) layoutChoice.height = node.box.height;
+      layoutChoice.left = effectiveBox.x - parentBox.x;
+      layoutChoice.top = effectiveBox.y - parentBox.y;
+      if (Number.isFinite(effectiveBox.width)) layoutChoice.width = effectiveBox.width;
+      if (Number.isFinite(effectiveBox.height)) layoutChoice.height = effectiveBox.height;
     }
     // A flow-safe freeform member is a REAL flex child of its (now
     // flex-container) parent — no left/top at all, since flex placement
@@ -1070,4 +1257,10 @@ async function renderIrExperimental(document, opts = {}) {
   };
 }
 
-module.exports = { renderIrExperimental };
+module.exports = {
+  renderIrExperimental,
+  sanitizeGridTrackString,
+  rekeyForNdgCollapse,
+  indexRawNodesById,
+  collapsedWrapperBoxBySurvivorId,
+};

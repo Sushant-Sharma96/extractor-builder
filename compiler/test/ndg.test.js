@@ -588,6 +588,34 @@ async function main() {
     assert(ids.has('p3-child'), 'child reparented to grandparent');
   });
 
+  await test('Native Grid Auto Layout: gridColumnCount/gridRowCount/gaps/sizing strings + per-child anchor+span ingested', () => {
+    const wn = workingNodeFromRaw({
+      id: '1:5',
+      type: 'FRAME',
+      layoutMode: 'GRID',
+      gridColumnCount: 3,
+      gridRowCount: 2,
+      gridRowGap: 1,
+      gridColumnGap: 1,
+      gridColumnsSizing: 'repeat(3,minmax(0,1fr))',
+      gridRowsSizing: '  209.50px 209.50px',
+    });
+    assert(wn.attributes.gridColumnCount === 3, 'gridColumnCount');
+    assert(wn.attributes.gridRowCount === 2, 'gridRowCount');
+    assert(wn.attributes.gridRowGap === 1, 'gridRowGap');
+    assert(wn.attributes.gridColumnGap === 1, 'gridColumnGap');
+    assert(wn.attributes.gridColumnsSizing === 'repeat(3,minmax(0,1fr))', 'gridColumnsSizing');
+    assert(wn.attributes.gridRowsSizing === '  209.50px 209.50px', 'gridRowsSizing');
+
+    const child = workingNodeFromRaw({
+      id: '1:6', type: 'FRAME', gridRowAnchorIndex: 1, gridColumnAnchorIndex: 2, gridRowSpan: 1, gridColumnSpan: 1,
+    });
+    assert(child.attributes.gridRowAnchorIndex === 1, 'gridRowAnchorIndex');
+    assert(child.attributes.gridColumnAnchorIndex === 2, 'gridColumnAnchorIndex');
+    assert(child.attributes.gridRowSpan === 1, 'gridRowSpan');
+    assert(child.attributes.gridColumnSpan === 1, 'gridColumnSpan');
+  });
+
   console.log('\n---');
   console.log(`Passed: ${passed}  Failed: ${failed}`);
   if (failed) process.exitCode = 1;

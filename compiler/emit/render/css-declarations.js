@@ -348,6 +348,47 @@ function modeDecls(layoutChoice) {
     if (Number.isFinite(cols) && cols > 0) {
       decls.push(['grid-template-columns', `repeat(${cols}, 1fr)`]);
     }
+  } else if (mode === 'grid-real') {
+    // Native Figma Grid Auto Layout (see ir-experimental-renderer.js's
+    // isRealGridContainer comment) — a real declared layout, not a guess:
+    // prefer Figma's own near-literal CSS track strings, falling back to a
+    // generic repeat(N, ...) built from the plain row/column counts only
+    // when the sizing string is absent or failed sanitization (never
+    // invents a track count Figma didn't also give us).
+    decls.push(['display', 'grid']);
+    const colsTemplate = layoutChoice && layoutChoice.gridColumnsTemplate;
+    const rowsTemplate = layoutChoice && layoutChoice.gridRowsTemplate;
+    const colCount = layoutChoice && layoutChoice.gridColumnCount;
+    const rowCount = layoutChoice && layoutChoice.gridRowCount;
+    if (colsTemplate) {
+      decls.push(['grid-template-columns', colsTemplate]);
+    } else if (Number.isFinite(colCount) && colCount > 0) {
+      decls.push(['grid-template-columns', `repeat(${colCount}, 1fr)`]);
+    }
+    if (rowsTemplate) {
+      decls.push(['grid-template-rows', rowsTemplate]);
+    } else if (Number.isFinite(rowCount) && rowCount > 0) {
+      decls.push(['grid-template-rows', `repeat(${rowCount}, auto)`]);
+    }
+    // Real grid supports independent row/column gaps (unlike flow-row/
+    // flow-column/grid-track's single shared `gap` below), so these are
+    // handled here directly rather than through the generic `gap` block.
+    const gridRowGap = layoutChoice && layoutChoice.gridRowGap;
+    const gridColumnGap = layoutChoice && layoutChoice.gridColumnGap;
+    if (Number.isFinite(gridRowGap)) decls.push(['row-gap', px(gridRowGap)]);
+    if (Number.isFinite(gridColumnGap)) decls.push(['column-gap', px(gridColumnGap)]);
+  }
+  // Explicit grid-row/grid-column placement for a child of a real Grid Auto
+  // Layout container — orthogonal to `mode` (which still describes how
+  // THIS node arranges its OWN children) and to isPositionedAbsolute (a
+  // grid-placed child is never also absolutely positioned — see
+  // ir-experimental-renderer.js's hasRealGridPlacement exclusion). Sourced
+  // directly from Figma's own 0-based anchor + span, never inferred from
+  // document order.
+  if (layoutChoice && layoutChoice.gridPlacement) {
+    const { rowStart, rowSpan, colStart, colSpan } = layoutChoice.gridPlacement;
+    decls.push(['grid-row', `${rowStart} / span ${rowSpan}`]);
+    decls.push(['grid-column', `${colStart} / span ${colSpan}`]);
   }
   // Tracks whether the absolute-positioning branch below already pinned
   // width/height, so the flow-container sizing branch further down (a node

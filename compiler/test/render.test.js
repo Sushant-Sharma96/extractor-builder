@@ -30,6 +30,7 @@ const { materializeHtml } = require('../emit/render/materialize-html');
 const { CSS_RESET_BLOCK } = require('../emit/render/utility-css');
 const { buildLayoutChoices } = require('../emit/project');
 const { applyLayoutBindings } = require('../artifacts/apply-plan');
+const { sanitizeGridTrackString, rekeyForNdgCollapse } = require('../artifacts/ir-experimental-renderer');
 
 let passed = 0;
 let failed = 0;
@@ -1253,6 +1254,94 @@ test('materializeHtml — a TEXT node is never aria-hidden, even if (hypothetica
   const { html } = materializeHtml(renderTree);
   assert.ok(!/aria-hidden/.test(html), 'TEXT rendering path never even checks role — this asserts that stays true');
   assert.ok(html.includes('Hello'));
+});
+
+// ─── Native Figma Grid Auto Layout (layoutMode:'GRID') ─────────────────────
+
+test('sanitizeGridTrackString — accepts Figma\'s own real track strings verbatim', () => {
+  assert.strictEqual(sanitizeGridTrackString('repeat(3,minmax(0,1fr))'), 'repeat(3,minmax(0,1fr))');
+  assert.strictEqual(sanitizeGridTrackString('  209.50px 209.50px'), '209.50px 209.50px');
+});
+
+test('sanitizeGridTrackString — rejects anything outside a safe grid-track character set (defense in depth)', () => {
+  assert.strictEqual(sanitizeGridTrackString('1fr; } body { display:none'), null);
+  assert.strictEqual(sanitizeGridTrackString('<script>alert(1)</script>'), null);
+  assert.strictEqual(sanitizeGridTrackString(''), null);
+  assert.strictEqual(sanitizeGridTrackString(null), null);
+  assert.strictEqual(sanitizeGridTrackString(undefined), null);
+  assert.strictEqual(sanitizeGridTrackString(42), null);
+});
+
+test('modeDecls — mode:grid-real emits Figma\'s own track strings + independent row/column gaps (the real fixture that was previously falling through to unstyled block flow)', () => {
+  const decls = modeDecls({
+    mode: 'grid-real',
+    gridColumnsTemplate: 'repeat(3,minmax(0,1fr))',
+    gridRowsTemplate: '209.50px 209.50px',
+    gridRowGap: 1,
+    gridColumnGap: 1,
+  });
+  const map = new Map(decls);
+  assert.strictEqual(map.get('display'), 'grid');
+  assert.strictEqual(map.get('grid-template-columns'), 'repeat(3,minmax(0,1fr))');
+  assert.strictEqual(map.get('grid-template-rows'), '209.50px 209.50px');
+  assert.strictEqual(map.get('row-gap'), '1px');
+  assert.strictEqual(map.get('column-gap'), '1px');
+});
+
+test('modeDecls — mode:grid-real falls back to repeat(N, ...) from plain counts when the sizing string is absent (never invents a count Figma didn\'t give)', () => {
+  const decls = modeDecls({ mode: 'grid-real', gridColumnCount: 3, gridRowCount: 2 });
+  const map = new Map(decls);
+  assert.strictEqual(map.get('grid-template-columns'), 'repeat(3, 1fr)');
+  assert.strictEqual(map.get('grid-template-rows'), 'repeat(2, auto)');
+});
+
+test('modeDecls — gridPlacement emits explicit grid-row/grid-column from Figma\'s own 0-based anchor+span (1-based, span-qualified)', () => {
+  const decls = modeDecls({
+    mode: 'flow-column', // the child's OWN mode (how it arranges its children) is independent of its placement
+    gridPlacement: { rowStart: 2, rowSpan: 1, colStart: 3, colSpan: 1 },
+  });
+  const map = new Map(decls);
+  assert.strictEqual(map.get('grid-row'), '2 / span 1');
+  assert.strictEqual(map.get('grid-column'), '3 / span 1');
+});
+
+test('modeDecls — no gridPlacement means no grid-row/grid-column at all (no over-application to ordinary nodes)', () => {
+  const decls = modeDecls({ mode: 'flow-column' });
+  const map = new Map(decls);
+  assert.strictEqual(map.has('grid-row'), false);
+  assert.strictEqual(map.has('grid-column'), false);
+});
+
+// ─── NDG collapse vs. NDG-bypassing legacy lookups (svgMarkup/imageUrls) ───
+
+test('rekeyForNdgCollapse — re-keys a pre-collapse id to its survivor (confirmed real bug: a single-vector icon\'s wrapping SVG frame gets collapsed by NDG Pass 3, but svgMarkup was computed keyed by the deleted wrapper\'s id)', () => {
+  const svgMarkup = { '48:144': '<svg>...</svg>' };
+  const events = [{ type: 'collapsed', reason: 'ndg.collapsed.passthrough', sourceNodeId: '48:144', replacedBy: '48:145' }];
+  const rekeyed = rekeyForNdgCollapse(svgMarkup, events);
+  assert.strictEqual(rekeyed['48:145'], '<svg>...</svg>');
+  assert.strictEqual('48:144' in rekeyed, false);
+});
+
+test('rekeyForNdgCollapse — follows a chain of multiple collapses to the final survivor', () => {
+  const svgMarkup = { a: 'markup-a' };
+  const events = [
+    { type: 'collapsed', sourceNodeId: 'a', replacedBy: 'b' },
+    { type: 'collapsed', sourceNodeId: 'b', replacedBy: 'c' },
+  ];
+  const rekeyed = rekeyForNdgCollapse(svgMarkup, events);
+  assert.strictEqual(rekeyed.c, 'markup-a');
+});
+
+test('rekeyForNdgCollapse — no collapse events means no change at all (fallback guarantee)', () => {
+  const svgMarkup = { x: 'markup-x' };
+  assert.deepStrictEqual(rekeyForNdgCollapse(svgMarkup, []), svgMarkup);
+  assert.deepStrictEqual(rekeyForNdgCollapse(svgMarkup, null), svgMarkup);
+});
+
+test('rekeyForNdgCollapse — an unrelated collapse event (different id) leaves an untouched entry exactly as-is', () => {
+  const svgMarkup = { x: 'markup-x' };
+  const events = [{ type: 'collapsed', sourceNodeId: 'y', replacedBy: 'z' }];
+  assert.deepStrictEqual(rekeyForNdgCollapse(svgMarkup, events), { x: 'markup-x' });
 });
 
 process.exitCode = failed ? 1 : 0;

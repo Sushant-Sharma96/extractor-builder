@@ -118,6 +118,25 @@ function workingNodeFromRaw(raw, pathHint) {
       counterAxisSizingMode: raw.counterAxisSizingMode || null,
       layoutSizingHorizontal: raw.layoutSizingHorizontal || null,
       layoutSizingVertical: raw.layoutSizingVertical || null,
+      // Native Figma Grid Auto Layout (layoutMode:'GRID') — a real,
+      // declarative feature entirely distinct from this compiler's own
+      // geometry-GUESSED 'grid-track' mode. Figma hands us near-literal CSS:
+      // gridColumnsSizing/gridRowsSizing are already valid grid-template-
+      // columns/rows syntax (e.g. "repeat(3,minmax(0,1fr))"), and every
+      // child carries its own explicit 0-based row/column anchor + span —
+      // no clustering or guessing needed, only reading. Confirmed via a real
+      // fixture that previously fell through to unstyled block flow because
+      // nothing read any of these fields at all.
+      gridRowCount: raw.gridRowCount != null ? raw.gridRowCount : null,
+      gridColumnCount: raw.gridColumnCount != null ? raw.gridColumnCount : null,
+      gridRowGap: numOrNull(raw.gridRowGap),
+      gridColumnGap: numOrNull(raw.gridColumnGap),
+      gridColumnsSizing: raw.gridColumnsSizing || null,
+      gridRowsSizing: raw.gridRowsSizing || null,
+      gridRowAnchorIndex: raw.gridRowAnchorIndex != null ? raw.gridRowAnchorIndex : null,
+      gridColumnAnchorIndex: raw.gridColumnAnchorIndex != null ? raw.gridColumnAnchorIndex : null,
+      gridRowSpan: raw.gridRowSpan != null ? raw.gridRowSpan : null,
+      gridColumnSpan: raw.gridColumnSpan != null ? raw.gridColumnSpan : null,
       characters: raw.characters || raw.text || null,
       // Typography — a real Figma TEXT node nests these under `raw.style`
       // (`style.fontFamily`, `.fontWeight`, `.fontSize`, `.letterSpacing`,
