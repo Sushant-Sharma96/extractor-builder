@@ -1,0 +1,17 @@
+{
+  "contractId": "KnowledgeBundle",
+  "bundleId": "recognition-composed",
+  "version": "1.0.0",
+  "suiteVersion": "1.0.0",
+  "createdAt": "2026-07-18T00:00:00.000Z",
+  "description": "Composition root: base UI ontology + Phase 9 recognition ontology",
+  "layers": [
+    { "bundleId": "compiler-ui-ontology", "version": "1.0.0" },
+    { "bundleId": "recognition-ontology", "version": "1.0.0" }
+  ],
+  "dependencies": [],
+  "entries": [],
+  "relations": [],
+  "packs": [],
+  "priors": []
+}

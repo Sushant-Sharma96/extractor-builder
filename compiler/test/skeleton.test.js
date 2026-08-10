@@ -257,6 +257,27 @@ test('reading order — freeform parent (no layoutMode) resolves by real visual 
   assert.strictEqual(skeletonEntry(skeleton, 'row-004').readingOrder, 3);
 });
 
+test('reading order — same visual row despite a 40px top-edge gap from mismatched card heights resolves by X, not by the top-edge gap (real bug: Figma file c0kt3mp76RoEiq3CFoeCHa node 39:9, "Why Participate?")', () => {
+  const cardFill = [{ type: 'SOLID', color: { r: 1, g: 1, b: 1 } }];
+  const graph = graphOfChild({
+    id: 'why-participate-row',
+    type: 'GROUP',
+    absoluteBoundingBox: { x: 0, y: 0, width: 1300, height: 550 },
+    children: [
+      // Declared order deliberately does NOT match left-to-right X, so a
+      // pass would only prove the fix if it actually reorders by X — a
+      // no-op "leave declared order alone" implementation would fail this.
+      { id: 'sharpen', type: 'FRAME', fills: cardFill, absoluteBoundingBox: { x: 197, y: 230, width: 233, height: 226 } },
+      { id: 'earn', type: 'FRAME', fills: cardFill, absoluteBoundingBox: { x: 1054, y: 195, width: 152, height: 300 } },
+      { id: 'knowledge', type: 'FRAME', fills: cardFill, absoluteBoundingBox: { x: 631, y: 190, width: 183, height: 323 } },
+    ],
+  }, { x: 0, y: 0, width: 1300, height: 550 });
+  const skeleton = buildDesignSkeleton(graph);
+  assert.strictEqual(skeletonEntry(skeleton, 'sharpen').readingOrder, 0, 'leftmost (x=197), despite the largest top-edge y (230)');
+  assert.strictEqual(skeletonEntry(skeleton, 'knowledge').readingOrder, 1, 'middle (x=631)');
+  assert.strictEqual(skeletonEntry(skeleton, 'earn').readingOrder, 2, 'rightmost (x=1054), despite the smallest top-edge y (195)');
+});
+
 test('resolveReadingOrder is provably equivalent to the already-proven orderChildrenVisualY for freeform siblings (isHeader:false case) — this is what makes swapping one for the other in the renderer safe, not just plausible', () => {
   const kids = [
     { id: 'a', box: { x: 10, y: 100, width: 5, height: 5 } },
@@ -319,6 +340,103 @@ test('repeating-group membership — 3 uniform freeform "cards" in a row are tag
   assert.ok(skeleton.freeformGroups.length >= 1, 'the underlying freeform group fact is exposed too');
 });
 
+test('docs/COMPILER_REDESIGN_ROADMAP.md Phase 3 — a node claimed by Component Recognition (a real Figma INSTANCE) gets componentClaim set and is EXCLUDED from this Skeleton\'s own freeform repeating-group clustering, even though it is geometrically identical to its uniform siblings — "declared beats inferred" enforced as a real precedence rule, not left to chance', () => {
+  const cardW = 100;
+  const gap = 20;
+  const makeCard = (i) => ({
+    id: `pcard-${i}`,
+    type: 'FRAME',
+    absoluteBoundingBox: { x: i * (cardW + gap), y: 0, width: cardW, height: 120 },
+    fills: [{ type: 'SOLID', color: { r: 1, g: 1, b: 1 } }],
+    children: [{
+      id: `pcard-${i}-label`,
+      type: 'TEXT',
+      characters: `Card ${i}`,
+      absoluteBoundingBox: { x: i * (cardW + gap) + 10, y: 10, width: cardW - 20, height: 20 },
+    }],
+  });
+  // card 1 is a real Figma INSTANCE of a component defined elsewhere in the
+  // same graph — geometrically indistinguishable from cards 0/2 (same size,
+  // same row, same gap), which is exactly the point: only the DECLARED
+  // component/instance data (not geometry) can tell them apart.
+  const instanceCard = {
+    ...makeCard(1),
+    id: 'pcard-1',
+    type: 'INSTANCE',
+    mainComponent: 'def-key-card',
+  };
+  const graph = graphOfChild({
+    id: 'pgroup1',
+    type: 'GROUP',
+    absoluteBoundingBox: { x: 0, y: 0, width: 3 * cardW + 2 * gap, height: 160 },
+    children: [
+      {
+        id: 'def-card',
+        type: 'COMPONENT',
+        componentKey: 'def-key-card',
+        absoluteBoundingBox: { x: 0, y: 140, width: cardW, height: 20 },
+        fills: [{ type: 'SOLID', color: { r: 1, g: 1, b: 1 } }],
+        children: [],
+      },
+      makeCard(0),
+      instanceCard,
+      makeCard(2),
+    ],
+  }, { x: 0, y: 0, width: 3 * cardW + 2 * gap, height: 160 });
+  const skeleton = buildDesignSkeleton(graph);
+
+  const instEntry = skeletonEntry(skeleton, 'pcard-1');
+  assert.ok(instEntry.componentClaim, 'the real INSTANCE gets a componentClaim');
+  assert.strictEqual(instEntry.componentClaim.kind, 'instance');
+  assert.strictEqual(instEntry.componentClaim.defId, 'def-key-card');
+  assert.strictEqual(instEntry.group, null, 'a component-claimed node is NEVER also tagged as a freeform repeating-group member, even though it is geometrically identical to its uniform siblings');
+
+  const defEntry = skeletonEntry(skeleton, 'def-card');
+  assert.ok(defEntry.componentClaim, 'the COMPONENT definition itself also gets a componentClaim');
+  assert.strictEqual(defEntry.componentClaim.kind, 'definition');
+
+  const card0 = skeletonEntry(skeleton, 'pcard-0');
+  const card2 = skeletonEntry(skeleton, 'pcard-2');
+  assert.strictEqual(card0.componentClaim, null, 'an ordinary FRAME sibling gets no componentClaim');
+  assert.ok(card0.group, 'ordinary siblings are still correctly clustered as freeform group members — one component-claimed sibling does not break clustering for the rest');
+  assert.ok(card2.group, 'same for the sibling on the other side of the claimed instance');
+});
+
+test('docs/COMPILER_REDESIGN_ROADMAP.md Phase 4 — a real Figma INSTANCE\'s override VALUES (not just key names) reach this Skeleton\'s own componentClaim.overrideEntries, completing the thread from Component Recognition (Phase 2.5) into the canonical per-node fact a future consumer would actually read', () => {
+  const graph = graphOfChild({
+    id: 'ogroup',
+    type: 'GROUP',
+    absoluteBoundingBox: { x: 0, y: 0, width: 200, height: 100 },
+    children: [
+      {
+        id: 'def-btn', type: 'COMPONENT', componentKey: 'def-key-btn',
+        absoluteBoundingBox: { x: 0, y: 0, width: 80, height: 32 },
+        fills: [{ type: 'SOLID', color: { r: 1, g: 1, b: 1 } }],
+        children: [],
+      },
+      {
+        id: 'btn-inst', type: 'INSTANCE', mainComponent: 'def-key-btn',
+        overrides: [{ id: 'text', field: 'characters', value: 'Submit' }],
+        absoluteBoundingBox: { x: 0, y: 40, width: 80, height: 32 },
+        fills: [{ type: 'SOLID', color: { r: 1, g: 1, b: 1 } }],
+        children: [],
+      },
+    ],
+  }, { x: 0, y: 0, width: 200, height: 100 });
+  const skeleton = buildDesignSkeleton(graph);
+  const instEntry = skeletonEntry(skeleton, 'btn-inst');
+  assert.ok(instEntry.componentClaim, 'the instance gets a componentClaim');
+  assert.deepStrictEqual(instEntry.componentClaim.overrideKeys, ['text'], 'override key names still present, unchanged');
+  assert.ok(Array.isArray(instEntry.componentClaim.overrideEntries), 'overrideEntries is an array');
+  assert.strictEqual(instEntry.componentClaim.overrideEntries.length, 1);
+  assert.strictEqual(instEntry.componentClaim.overrideEntries[0].key, 'text');
+  assert.strictEqual(instEntry.componentClaim.overrideEntries[0].value, 'Submit', 'the actual override VALUE reaches the Skeleton, not just the key name (Research Part 5\'s confirmed gap, closed end-to-end)');
+
+  const defEntry = skeletonEntry(skeleton, 'def-btn');
+  assert.strictEqual(defEntry.componentClaim.kind, 'definition');
+  assert.strictEqual(defEntry.componentClaim.overrideEntries, undefined, 'a definition (not an instance) has no overrideEntries field at all — overrides are an instance-only concept');
+});
+
 test('a node with no detected repeating group has group:null (no false-positive tagging)', () => {
   const graph = graphOfChild({
     id: 'lonely', type: 'TEXT', characters: 'x', absoluteBoundingBox: { x: 0, y: 0, width: 50, height: 20 },
@@ -364,6 +482,59 @@ test('real fixture (Incentives) — Skeleton builds cleanly, every node gets exa
     'role distribution is not degenerate (everything classified identically)',
   );
   console.log(`  (role distribution: ${JSON.stringify(roleCounts)})`);
+});
+
+test('docs/COMPILER_REDESIGN_ROADMAP.md Phase 3 — real detectGeometry()/detectComponentGeometry() output, threaded through as geometryDetected/componentDetected, reaches per-node geometryHints/cardFact/bannerFact/rowSetFact on a real cached fixture (the actual "wrapping" this phase exists to do, proven against real data, not just synthetic)', () => {
+  process.env.FIGMA_CACHE_DIR = path.resolve(__dirname, '..', '..', 'output', 'figma-cache');
+  const snapMod = require('../../server/figma-snapshot');
+  const snap = snapMod.loadSnapshot('fYKUEGHAxVkJwn8CwvJCsp', '0:1');
+  if (!snap) {
+    console.log('SKIP  (no cached Incentives snapshot available in this environment)');
+    return;
+  }
+  function find(n, id) {
+    if (!n) return null;
+    if (n.id === id) return n;
+    for (const c of n.children || []) {
+      const f = find(c, id);
+      if (f) return f;
+    }
+    return null;
+  }
+  const document = find(snap.document, '50:192') || find(snap.document, '50:2');
+  assert.ok(document, 'fixture document node found');
+
+  const { detectGeometry } = require('../geometry');
+  const { detectComponentGeometry } = require('../rulepack/packs/component-detect/geometry-rules');
+  const graph = buildNormalizedDesignGraph({ document, graphId: 'ndg:skel-real-geometry' }).graph;
+  const geometryDetected = detectGeometry(graph, {});
+  const geometryCandidatesByNode = {};
+  for (const c of geometryDetected.candidates || []) geometryCandidatesByNode[c.nodeId] = c;
+  const componentDetected = detectComponentGeometry(graph, { geometryCandidatesByNode });
+
+  const skeleton = buildDesignSkeleton(graph, { geometryDetected, componentDetected });
+
+  assert.ok(skeleton.geometryCandidates.length > 0, 'real geometry candidates reach the top-level skeleton.geometryCandidates array');
+  const hintedEntries = skeleton.nodes.filter((n) => n.geometryHints.length > 0);
+  assert.ok(hintedEntries.length > 0, 'at least one real node has a non-empty geometryHints array');
+
+  // Cross-reference: every node this Skeleton says has a cardFact must
+  // actually be one of detectComponentGeometry's own cardFacts for this
+  // exact graph — proves the per-node map is a real, correct index, not a
+  // coincidental pass-through.
+  for (const entry of skeleton.nodes) {
+    if (!entry.cardFact) continue;
+    const match = componentDetected.cardFacts.find((f) => f.nodeId === entry.nodeId);
+    assert.ok(match, `entry ${entry.nodeId}'s cardFact must correspond to a real detectComponentGeometry() cardFacts entry`);
+    assert.strictEqual(entry.cardFact, match, 'same object reference — no unnecessary copying');
+  }
+
+  // Backward-compatibility guarantee: omitting these options entirely still
+  // produces empty (not crashing, not throwing) hints/facts, exactly as
+  // every other test in this file (which doesn't pass them) already relies on.
+  const bareSkeleton = buildDesignSkeleton(graph);
+  assert.deepStrictEqual(bareSkeleton.geometryCandidates, [], 'omitting geometryDetected defaults to empty, unchanged from before this phase');
+  assert.ok(bareSkeleton.nodes.every((n) => n.geometryHints.length === 0 && n.cardFact === null), 'omitting componentDetected/geometryDetected leaves every node\'s new fields empty/null — safe default for every pre-existing caller');
 });
 
 console.log('\n---');

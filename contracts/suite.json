@@ -1,0 +1,18 @@
+{
+  "suiteId": "compiler-contract-suite",
+  "suiteVersion": "1.0.0",
+  "phase": 1,
+  "title": "Compiler Contract & IR Spine",
+  "status": "implemented",
+  "rfcReferences": [
+    "docs/COMPILER_ARCHITECTURE_AUDIT.md",
+    "docs/COMPILER_DECISION_SYSTEM.md",
+    "docs/IMPLEMENTATION_MASTER_PLAN.md",
+    "docs/phases/PHASE_01_EXECUTION_PLAN.md"
+  ],
+  "notes": [
+    "Phase 1 spine only. No Kernel, Workspace, engines, or Knowledge content.",
+    "Policy threshold values are non-authoritative placeholders; Phase 5 owns product values.",
+    "Specialized IR schemas are envelopes; domain field catalogs deferred to engine phases."
+  ]
+}

@@ -1,0 +1,17 @@
+{
+  "watch": ["server", "compiler", "contracts"],
+  "ext": "js,mjs,cjs,json",
+  "ignore": [
+    "output/**",
+    "output",
+    "**/figma-cache/**",
+    "verify-offline-out/**",
+    ".figma-cache/**",
+    "client/**",
+    "node_modules/**",
+    ".git/**",
+    "**/*.test.js",
+    "docs/**"
+  ],
+  "delay": 500
+}

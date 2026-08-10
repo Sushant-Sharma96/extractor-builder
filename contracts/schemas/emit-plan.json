@@ -1,0 +1,84 @@
+{
+  "$schema": "https://json-schema.org/draft-07/schema#",
+  "contractId": "EmitPlan",
+  "suiteVersion": "1.0.0",
+  "title": "EmitPlan",
+  "description": "Lowering intent only. Interpretive choices reference committed Decisions.",
+  "type": "object",
+  "required": ["contractId", "suiteVersion", "planId", "resolvedId", "tagChoices"],
+  "properties": {
+    "contractId": { "const": "EmitPlan" },
+    "suiteVersion": { "type": "string" },
+    "planId": { "type": "string", "minLength": 1 },
+    "resolvedId": { "type": "string", "minLength": 1 },
+    "policyProfileId": { "type": "string" },
+    "tagChoices": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["nodeId", "tag", "decisionId"],
+        "properties": {
+          "nodeId": { "type": "string", "minLength": 1 },
+          "tag": { "type": "string", "minLength": 1 },
+          "decisionId": { "type": "string", "minLength": 1 }
+        },
+        "additionalProperties": false
+      }
+    },
+    "roleChoices": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["nodeId", "role", "decisionId"],
+        "properties": {
+          "nodeId": { "type": "string", "minLength": 1 },
+          "role": { "type": "string", "minLength": 1 },
+          "decisionId": { "type": "string", "minLength": 1 }
+        },
+        "additionalProperties": false
+      }
+    },
+    "layoutChoices": {
+      "type": "array",
+      "description": "Phase 3 (docs/COMPILER_MIGRATION_BLUEPRINT.md) — per-node chosen arrangement mode + gap/padding (from LayoutIR) plus optional card/banner chrome facts (from Component IR), symmetrical to tagChoices/roleChoices. Consumed by compiler/emit/render/* and compiler/artifacts/apply-plan.js's applyLayoutBindings.",
+      "items": {
+        "type": "object",
+        "required": ["nodeId", "mode"],
+        "properties": {
+          "nodeId": { "type": "string", "minLength": 1 },
+          "mode": { "type": "string", "minLength": 1 },
+          "gap": {},
+          "padding": {},
+          "decisionIds": { "type": "array", "items": { "type": "string" } },
+          "cardShape": { "type": "string" },
+          "cardFact": { "type": "object", "additionalProperties": true },
+          "bannerShape": { "type": "boolean" },
+          "bannerFact": { "type": "object", "additionalProperties": true }
+        },
+        "additionalProperties": true
+      }
+    },
+    "classStrategy": {
+      "type": "object",
+      "additionalProperties": true
+    },
+    "jsModules": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["moduleId", "authorizedByDecisionId"],
+        "properties": {
+          "moduleId": { "type": "string" },
+          "authorizedByDecisionId": { "type": "string" }
+        },
+        "additionalProperties": false
+      }
+    },
+    "assetEmbedRefs": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "References into AssetIR / asset plan ids."
+    }
+  },
+  "additionalProperties": false
+}

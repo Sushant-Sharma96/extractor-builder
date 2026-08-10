@@ -1,0 +1,15 @@
+{
+  "contractId": "DecisionRecord",
+  "suiteVersion": "1.0.0",
+  "id": "dec-bad",
+  "subject": "src:1:2",
+  "question": "html.tag",
+  "candidates": [],
+  "evidence": [],
+  "scores": [],
+  "ranking": [],
+  "winner": { "kind": "abstain" },
+  "policy": { "profileId": "semantic-lean" },
+  "alternatives_kept": [],
+  "trace_refs": []
+}

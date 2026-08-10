@@ -1,0 +1,6 @@
+{
+  "evidenceId": "ev-1",
+  "kind": "feature",
+  "ref": "equalGap",
+  "detail": { "epsilon": 2 }
+}

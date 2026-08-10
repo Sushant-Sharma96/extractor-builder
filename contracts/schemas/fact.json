@@ -1,0 +1,34 @@
+{
+  "$schema": "https://json-schema.org/draft-07/schema#",
+  "contractId": "Fact",
+  "suiteVersion": "1.0.0",
+  "title": "Fact",
+  "description": "Immutable assertion. Not an interpretation.",
+  "type": "object",
+  "required": ["contractId", "suiteVersion", "factId", "kind", "subject", "assertion"],
+  "properties": {
+    "contractId": { "const": "Fact" },
+    "suiteVersion": { "type": "string" },
+    "factId": { "type": "string", "minLength": 1 },
+    "kind": { "type": "string", "minLength": 1 },
+    "subject": {
+      "oneOf": [
+        { "type": "string", "minLength": 1 },
+        { "type": "array", "items": { "type": "string", "minLength": 1 }, "minItems": 1 }
+      ]
+    },
+    "assertion": { "type": "object", "additionalProperties": true },
+    "derivedFromFactIds": { "type": "array", "items": { "type": "string" } },
+    "invalidatesFactIds": { "type": "array", "items": { "type": "string" } },
+    "producer": {
+      "type": "object",
+      "properties": {
+        "engineId": { "type": "string" },
+        "packId": { "type": "string" },
+        "ruleId": { "type": "string" }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

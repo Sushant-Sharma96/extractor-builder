@@ -1,0 +1,29 @@
+{
+  "contractId": "PolicyProfile",
+  "suiteVersion": "1.0.0",
+  "profileId": "pixel-faithful",
+  "profileVersion": "1.0.0",
+  "description": "High accept/margin for semantic upgrades; aggressive abstain. Gate fail-closed.",
+  "valuesAuthoritative": true,
+  "gateMode": "fail_closed",
+  "thresholds": {
+    "accept_min": 0.75,
+    "margin_min": 0.12,
+    "fallback_below": 0.55,
+    "fail_closed_below": 0.35,
+    "pattern_name_cap": 0.35
+  },
+  "budgets": {
+    "maxTimeMs": 120000,
+    "maxMemoryBytes": null,
+    "maxAssetBytes": null,
+    "maxDomNodes": null
+  },
+  "allowedEngineIds": [],
+  "allowedPackIds": [],
+  "flags": {
+    "authorizeInteractionJs": false,
+    "requireBehaviorCoverage": false,
+    "aggressiveAbstain": true
+  }
+}

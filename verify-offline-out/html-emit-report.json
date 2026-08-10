@@ -1,0 +1,34 @@
+{
+  "figmaNodeCounts": {
+    "total": 12,
+    "text": 5,
+    "image": 1,
+    "vector": 2,
+    "frame": 3,
+    "other": 1
+  },
+  "analyzedTreeCounts": {
+    "total": 12,
+    "text": 5,
+    "img": 1,
+    "svg": 2,
+    "el": 4
+  },
+  "htmlCounts": {
+    "tags": 22,
+    "textTags": 6,
+    "imgs": 1,
+    "svgs": 2,
+    "emptySections": 0,
+    "hackspace": true,
+    "register": true,
+    "offline": true,
+    "registration": true
+  },
+  "imgSrcSample": [
+    "src=\"https://s3-alpha-sig.figma.com/img/57cc/ef15/89fb9bd33ff783976ca25c7c514ddf4c?Expires=1785110400&Key-Pair-Id=APKAQ4GOSFWCW27IBOMQ&Signature=rNf9~E3AROlOdWp~k~4sftdy7xSaCoE2LPufjDjvYV-pHgviqsPpL3QjtgWz-9Jp4S3lQ~td4-tOfSuGwCfM1JlEzPMeoFTHQef3jSP4s3HZPEbZ9DieM6hsVNOneYRjLVn5gR-jcrTk3SSsxvaEBv8Ir2RtYYD8Gy8hKhY990KGXvKrUQbsSGA8FgPeEKPc2JpuWz~JzwL~shn~PYgT3VCs2Hy7WqZj1V~3VEPw-Jwm7hRDThvouzS0IaeW6Pp2GBk7Qa~nm4Lq3pE9faEN5IKS7P6Vg89o-XEHhhKrIf9kdgUktb-mPJQgaWsH3LRAf88F9P0IQ2B-08Wkqmdfvw__\"",
+    "src=\"script.js\""
+  ],
+  "assetsDownloaded": 1,
+  "emptySections": 0
+}

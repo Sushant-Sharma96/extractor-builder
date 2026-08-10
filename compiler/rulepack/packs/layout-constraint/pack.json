@@ -1,0 +1,46 @@
+{
+  "packId": "layout.constraint",
+  "version": "1.0.0",
+  "suiteVersion": "1.0.0",
+  "description": "Phase 11b — layout constraint relax proposers (never commit Decisions)",
+  "priority": 45,
+  "allowedPolicies": ["*"],
+  "knowledgeRefs": [],
+  "dependencies": [],
+  "rules": [
+    {
+      "ruleId": "layout.constraint.relax",
+      "question": "layout.constraint.relax",
+      "matcherRef": "layout.constraint.conflict",
+      "priorityBand": "P2",
+      "description": "Propose which soft layout constraint to relax under conflict"
+    }
+  ],
+  "plugin": {
+    "id": "rulepack.layout.constraint",
+    "version": "1.0.0",
+    "engineType": "proposer",
+    "phaseAffinity": "mid",
+    "determinism": "pure",
+    "reads": ["Fact", "Evidence"],
+    "writes": ["Hypothesis", "Evidence"],
+    "creates": ["Hypothesis", "Evidence"],
+    "destroys": [],
+    "consumes": ["Fact"],
+    "produces": ["Hypothesis", "Evidence", "Candidate"],
+    "requiredFacts": ["ndg.graph"],
+    "optionalFacts": ["ndg.node", "layout.ir"],
+    "emittedIR": [],
+    "acceptedQuestions": ["layout.constraint.relax"],
+    "allowedPolicies": ["*"],
+    "requiredCapabilities": [],
+    "incompatiblePlugins": [],
+    "estimatedCost": 4,
+    "estimatedMemory": 2048,
+    "timeout": 15000,
+    "retries": 0,
+    "crashIsolation": "try_catch",
+    "rollbackSupport": "workspace_tx",
+    "contractSuiteVersion": "1.0.0"
+  }
+}

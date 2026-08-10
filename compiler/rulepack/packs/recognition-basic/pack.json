@@ -1,0 +1,61 @@
+{
+  "packId": "recognition.basic",
+  "version": "1.0.0",
+  "suiteVersion": "1.0.0",
+  "description": "Phase 9 — low-level probabilistic block-like recognition (not Hero/Navbar)",
+  "priority": 30,
+  "allowedPolicies": ["*"],
+  "knowledgeRefs": [
+    "feature:recognition.signals",
+    "pattern:block.generic-block",
+    "pattern:block.button-like",
+    "pattern:block.card-like",
+    "pattern:block.container-like",
+    "pattern:block.text-block",
+    "pattern:block.image-block",
+    "pattern:block.divider",
+    "pattern:block.section",
+    "pattern:block.grid",
+    "pattern:block.stack",
+    "pattern:block.list"
+  ],
+  "dependencies": [
+    { "packId": "feature.extract", "versionRange": "^1.0.0", "required": false }
+  ],
+  "rules": [
+    {
+      "ruleId": "recognition.basic.blockKind",
+      "question": "recognition.blockKind",
+      "matcherRef": "feature:recognition.signals",
+      "priorityBand": "P5",
+      "description": "Propose multi-candidate block-like recognition from structural features"
+    }
+  ],
+  "plugin": {
+    "id": "rulepack.recognition.basic",
+    "version": "1.0.0",
+    "engineType": "proposer",
+    "phaseAffinity": "mid",
+    "determinism": "pure",
+    "reads": ["Fact", "Evidence"],
+    "writes": ["Hypothesis", "Evidence"],
+    "creates": ["Hypothesis", "Evidence"],
+    "destroys": [],
+    "consumes": ["Fact", "Evidence", "knowledge:pattern:*", "knowledge:feature:*"],
+    "produces": ["Hypothesis", "Evidence", "Candidate"],
+    "requiredFacts": [],
+    "optionalFacts": ["source.node"],
+    "emittedIR": [],
+    "acceptedQuestions": ["recognition.blockKind"],
+    "allowedPolicies": ["*"],
+    "requiredCapabilities": ["knowledge:read"],
+    "incompatiblePlugins": [],
+    "estimatedCost": 3,
+    "estimatedMemory": 2048,
+    "timeout": 5000,
+    "retries": 0,
+    "crashIsolation": "try_catch",
+    "rollbackSupport": "workspace_tx",
+    "contractSuiteVersion": "1.0.0"
+  }
+}

@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft-07/schema#",
+  "contractId": "RawDesignDocument",
+  "suiteVersion": "1.0.0",
+  "title": "RawDesignDocument",
+  "description": "Untouched design subtree + metadata. Pre-normalization. No interpretive Decisions.",
+  "type": "object",
+  "required": ["contractId", "suiteVersion", "documentId", "source", "document"],
+  "properties": {
+    "contractId": { "const": "RawDesignDocument" },
+    "suiteVersion": { "type": "string" },
+    "documentId": { "type": "string", "minLength": 1 },
+    "source": {
+      "type": "object",
+      "required": ["kind"],
+      "properties": {
+        "kind": { "type": "string", "enum": ["figma", "plugin", "other"] },
+        "fileKey": { "type": "string" },
+        "nodeId": { "type": "string" },
+        "url": { "type": "string" },
+        "fetchedAt": { "type": "string" },
+        "figmaVersion": { "type": ["string", "null"] }
+      },
+      "additionalProperties": false
+    },
+    "name": { "type": ["string", "null"] },
+    "document": {
+      "type": "object",
+      "description": "Opaque source tree object; structure owned by source adapter, not brain.",
+      "additionalProperties": true
+    },
+    "metadata": {
+      "type": "object",
+      "additionalProperties": true
+    }
+  },
+  "additionalProperties": false
+}

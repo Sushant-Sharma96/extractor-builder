@@ -443,6 +443,28 @@ async function emitArtifactsIrExperimental(opts = {}) {
     imageUrls: opts.imageUrls || {},
     imageFillUrls: opts.imageFillUrls || {},
     svgMarkup: opts.svgMarkup || {},
+    // Kernel Integration (docs/COMPILER_REDESIGN_ROADMAP.md Phase 6 follow-on)
+    // — when compile.js already ran the Kernel's own
+    // materializeNormalizedDesignGraph() (opts.precomputedNdg), hand it
+    // straight through instead of letting renderIrExperimental()
+    // re-materialize an equivalent graph itself. `undefined` when compile()
+    // was called with skipNdg, or when this function is invoked directly
+    // (e.g. by the regen-*-ir-experimental.js scripts) — the renderer's own
+    // `||` fallback (Phase 6 increment 2) self-materializes exactly as
+    // before in that case.
+    precomputedNdg: opts.precomputedNdg,
+    // Kernel Integration, slice 2 — same pass-through pattern as
+    // precomputedNdg above, for the LayoutIR slice (Phase 6 increment 4's
+    // opts.precomputedInterpretations).
+    precomputedInterpretations: opts.precomputedInterpretations,
+    // Kernel Integration, slice 3 — same pass-through pattern as
+    // precomputedNdg/precomputedInterpretations above, for the ComponentIR
+    // slice (Phase 6 increment 3's opts.precomputedComponentRecognition).
+    precomputedComponentRecognition: opts.precomputedComponentRecognition,
+    // Kernel Integration, slice 4 — same pass-through pattern as the above,
+    // for the ResponsiveIR slice (Phase 6 increment 5's
+    // opts.precomputedResponsive).
+    precomputedResponsive: opts.precomputedResponsive,
   });
   const { html, css } = rendered;
   const js = '// script.js — ir-experimental renderer (diagnostic/opt-in) — no authorized behavior modules\n';

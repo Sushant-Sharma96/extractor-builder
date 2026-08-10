@@ -1,0 +1,82 @@
+'use strict';
+
+/**
+ * materialize — collect → detect → project → publish
+ */
+
+const { executePlugin } = require('../plugin');
+const { collectResponsiveInputs } = require('./collect');
+const { detectResponsive } = require('./detect');
+const { projectResponsiveIR } = require('./project');
+const { publishResponsiveIR } = require('./publish');
+const { responsivePluginDeclaration } = require('./declaration');
+const { PLUGIN_ID, BUILDER_VERSION } = require('./constants');
+const { ResponsiveError, ResponsiveErrorKind } = require('./errors');
+
+async function materializeResponsiveIR(env = {}) {
+  if (!env.workspace) {
+    throw new ResponsiveError(ResponsiveErrorKind.PUBLISH, 'workspace required');
+  }
+
+  const startedAt = (env.clock || Date.now)();
+  const collected = collectResponsiveInputs(env.workspace, {
+    decisions: env.decisions,
+    layoutIr: env.layoutIr,
+    layoutSliceId: env.layoutSliceId,
+    skipLayout: env.skipLayout,
+  });
+
+  const detected = detectResponsive(collected.graph, {
+    decisions: collected.decisions,
+    policy: env.policy || {},
+    layoutIr: collected.layoutIr,
+    layoutDegraded: collected.layoutDegraded,
+  });
+
+  const projected = projectResponsiveIR(collected.graph, {
+    detected,
+    decisions: collected.decisions,
+    policy: env.policy || {},
+    layoutIr: collected.layoutIr,
+    layoutDegraded: collected.layoutDegraded,
+    suiteVersion: env.suiteVersion || '1.0.0',
+    sliceId: env.sliceId,
+  });
+
+  const declaration = responsivePluginDeclaration();
+  const result = await executePlugin({
+    declaration,
+    workspace: env.workspace,
+    policy: env.policy || { profileId: 'default' },
+    knowledge: env.knowledge || null,
+    handler: async (ctx) => {
+      const published = publishResponsiveIR(ctx, projected, {
+        fingerprint: env.fingerprint || null,
+        timing: { startedAt, buildMs: (env.clock || Date.now)() - startedAt },
+      });
+      ctx.log('responsive.ir.projected', {
+        graphId: collected.graph.graphId,
+        checksum: projected.checksum,
+      });
+      return published;
+    },
+  });
+
+  const endedAt = (env.clock || Date.now)();
+  const published = result.result || {};
+
+  return {
+    pluginId: PLUGIN_ID,
+    builderVersion: BUILDER_VERSION,
+    graphId: collected.graph.graphId,
+    slice: projected.slice,
+    checksum: projected.checksum,
+    detected,
+    report: published.report,
+    sliceId: published.sliceId || projected.slice.sliceId,
+    timing: { startedAt, endedAt, ms: endedAt - startedAt },
+    execute: result,
+  };
+}
+
+module.exports = { materializeResponsiveIR };

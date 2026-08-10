@@ -30,6 +30,7 @@ const {
   HINT_GEOMETRY_GRID,
   HINT_GEOMETRY_SIDE_BY_SIDE,
   HINT_GEOMETRY_COLUMN_FLEX,
+  HINT_GEOMETRY_SIDE_BY_SIDE_COLUMN,
 } = require('./constants');
 // Parent/child relationships live in graph.edges (kind:'parent'), not on the
 // node itself — reuse the same derivation layout.interpret already relies on,
@@ -39,6 +40,7 @@ const { resolveThresholds } = require('../decision/thresholds');
 const {
   evaluateGrid,
   evaluateSideBySideRow,
+  evaluateSideBySideColumn,
   evaluateColumnFlex,
   // ALIGN_TOL/GAP_TOL and isRealOverlap used to be re-declared locally in
   // this file — verbatim-identical to vocabulary.js's own copies (the exact
@@ -155,6 +157,7 @@ function detectGeometry(graph, opts = {}) {
   const recognitionHintsByNode = {};
   let gridCandidateCount = 0;
   let sideBySideCandidateCount = 0;
+  let sideBySideColumnCandidateCount = 0;
   let columnFlexCandidateCount = 0;
 
   function addHint(nodeId, hint) {
@@ -234,6 +237,32 @@ function detectGeometry(graph, opts = {}) {
       continue;
     }
 
+    // Phase 1 — side-by-side column (X-overlap ratio, not a shared left
+    // edge) — the direct symmetric counterpart of side-by-side row above.
+    // Only the row half of this looser tier existed before; a plain
+    // vertical stack of differently-sized blocks (e.g. a full-width card
+    // row below a narrower, centered heading) is at least as common a real
+    // shape, and previously fell all the way through to mode:'unknown'.
+    const sideBySideColumn = evaluateSideBySideColumn(node.id, kids);
+    evidence.push(...sideBySideColumn.evidence);
+    if (sideBySideColumn.axis) {
+      sideBySideColumnCandidateCount += 1;
+      addHint(node.id, HINT_GEOMETRY_SIDE_BY_SIDE_COLUMN);
+      candidates.push({
+        nodeId: node.id,
+        pattern: 'side-by-side-column',
+        axis: sideBySideColumn.axis,
+        orderedChildIds: sideBySideColumn.orderedIds,
+        gap: Number(sideBySideColumn.gap.toFixed(2)),
+      });
+      evidence.push({
+        kind: 'feature',
+        ref: EVIDENCE_CANDIDATE,
+        detail: { nodeId: node.id, pattern: 'side-by-side-column', gap: Number(sideBySideColumn.gap.toFixed(2)) },
+      });
+      continue;
+    }
+
     // Phase 1 — scored column-flex recovery (loosest/most probabilistic;
     // tried last, and only accepted at/above the resolved confidence bar).
     const columnFlex = evaluateColumnFlex(node.id, kids, columnFlexMinScore);
@@ -270,6 +299,7 @@ function detectGeometry(graph, opts = {}) {
     candidateCount: candidates.length,
     gridCandidateCount,
     sideBySideCandidateCount,
+    sideBySideColumnCandidateCount,
     columnFlexCandidateCount,
   };
 

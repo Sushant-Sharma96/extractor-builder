@@ -1,0 +1,172 @@
+{
+  "contractId": "KnowledgeBundle",
+  "bundleId": "recognition-ontology",
+  "version": "1.0.0",
+  "suiteVersion": "1.0.0",
+  "createdAt": "2026-07-18T00:00:00.000Z",
+  "description": "Phase 9 recognition feature_defs and low-level block-like patterns (not Hero/Navbar)",
+  "layers": [],
+  "dependencies": [],
+  "entries": [
+    { "entryId": "feature:recognition.signals", "kind": "feature_def" },
+    { "entryId": "feature:nodeType", "kind": "feature_def" },
+    { "entryId": "feature:autoLayout", "kind": "feature_def" },
+    { "entryId": "feature:hierarchy", "kind": "feature_def" },
+    {
+      "entryId": "pattern:block.generic-block",
+      "kind": "pattern",
+      "aliases": ["generic-block", "generic"],
+      "matcherRefs": ["feature:recognition.signals"],
+      "requiredEvidence": [],
+      "optionalEvidence": [],
+      "conflictsWith": [],
+      "obligations": [],
+      "emitHintsByPolicy": {},
+      "examples": []
+    },
+    {
+      "entryId": "pattern:block.button-like",
+      "kind": "pattern",
+      "aliases": ["button-like"],
+      "matcherRefs": ["feature:recognition.signals"],
+      "requiredEvidence": [],
+      "optionalEvidence": [],
+      "conflictsWith": [],
+      "obligations": [],
+      "emitHintsByPolicy": {},
+      "examples": []
+    },
+    {
+      "entryId": "pattern:block.card-like",
+      "kind": "pattern",
+      "aliases": ["card-like"],
+      "matcherRefs": ["feature:recognition.signals"],
+      "requiredEvidence": [],
+      "optionalEvidence": [],
+      "conflictsWith": [],
+      "obligations": [],
+      "emitHintsByPolicy": {},
+      "examples": []
+    },
+    {
+      "entryId": "pattern:block.container-like",
+      "kind": "pattern",
+      "aliases": ["container-like"],
+      "matcherRefs": ["feature:hierarchy"],
+      "requiredEvidence": [],
+      "optionalEvidence": [],
+      "conflictsWith": [],
+      "obligations": [],
+      "emitHintsByPolicy": {},
+      "examples": []
+    },
+    {
+      "entryId": "pattern:block.text-block",
+      "kind": "pattern",
+      "aliases": ["text-block"],
+      "matcherRefs": ["feature:nodeType"],
+      "requiredEvidence": [],
+      "optionalEvidence": [],
+      "conflictsWith": [],
+      "obligations": [],
+      "emitHintsByPolicy": {},
+      "examples": []
+    },
+    {
+      "entryId": "pattern:block.image-block",
+      "kind": "pattern",
+      "aliases": ["image-block"],
+      "matcherRefs": ["feature:nodeType"],
+      "requiredEvidence": [],
+      "optionalEvidence": [],
+      "conflictsWith": [],
+      "obligations": [],
+      "emitHintsByPolicy": {},
+      "examples": []
+    },
+    {
+      "entryId": "pattern:block.divider",
+      "kind": "pattern",
+      "aliases": ["divider"],
+      "matcherRefs": ["feature:recognition.signals"],
+      "requiredEvidence": [],
+      "optionalEvidence": [],
+      "conflictsWith": [],
+      "obligations": [],
+      "emitHintsByPolicy": {},
+      "examples": []
+    },
+    {
+      "entryId": "pattern:block.section",
+      "kind": "pattern",
+      "aliases": ["section"],
+      "matcherRefs": ["feature:hierarchy"],
+      "requiredEvidence": [],
+      "optionalEvidence": [],
+      "conflictsWith": [],
+      "obligations": [],
+      "emitHintsByPolicy": {},
+      "examples": []
+    },
+    {
+      "entryId": "pattern:block.grid",
+      "kind": "pattern",
+      "aliases": ["grid"],
+      "matcherRefs": ["feature:autoLayout"],
+      "requiredEvidence": [],
+      "optionalEvidence": [],
+      "conflictsWith": [],
+      "obligations": [],
+      "emitHintsByPolicy": {},
+      "examples": []
+    },
+    {
+      "entryId": "pattern:block.stack",
+      "kind": "pattern",
+      "aliases": ["stack"],
+      "matcherRefs": ["feature:autoLayout"],
+      "requiredEvidence": [],
+      "optionalEvidence": [],
+      "conflictsWith": [],
+      "obligations": [],
+      "emitHintsByPolicy": {},
+      "examples": []
+    },
+    {
+      "entryId": "pattern:block.list",
+      "kind": "pattern",
+      "aliases": ["list"],
+      "matcherRefs": ["feature:autoLayout", "feature:hierarchy"],
+      "requiredEvidence": [],
+      "optionalEvidence": [],
+      "conflictsWith": [],
+      "obligations": [],
+      "emitHintsByPolicy": {},
+      "examples": []
+    },
+    {
+      "entryId": "motif:structural-cue",
+      "kind": "motif",
+      "aliases": []
+    }
+  ],
+  "relations": [
+    {
+      "from": "pattern:block.button-like",
+      "to": "pattern:block.generic-block",
+      "type": "specializes"
+    },
+    {
+      "from": "pattern:block.card-like",
+      "to": "pattern:block.generic-block",
+      "type": "specializes"
+    },
+    {
+      "from": "pattern:block.stack",
+      "to": "motif:structural-cue",
+      "type": "suggests"
+    }
+  ],
+  "packs": ["feature.extract", "recognition.basic"],
+  "priors": []
+}

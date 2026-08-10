@@ -1,0 +1,16 @@
+{
+  "contractId": "PolicyProfile",
+  "suiteVersion": "1.0.0",
+  "profileId": "static-ok",
+  "profileVersion": "1.0.0",
+  "description": "Extends pixel-faithful thresholds; interaction commits must not authorize JS.",
+  "extends": "pixel-faithful",
+  "valuesAuthoritative": true,
+  "gateMode": "fail_closed",
+  "thresholds": {},
+  "flags": {
+    "authorizeInteractionJs": false,
+    "requireBehaviorCoverage": false,
+    "staticEmitOnly": true
+  }
+}

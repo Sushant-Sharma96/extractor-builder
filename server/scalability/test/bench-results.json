@@ -1,0 +1,16 @@
+{
+  "coldMissRest": "n/a (offline bench — no Figma)",
+  "warmExactHitMs": 5,
+  "warmSubtreeResolveMs": 9,
+  "warmSubtreePrepareMs": 23,
+  "refresh": "bypass → MISS (not timed vs live API)",
+  "compileMs": 151,
+  "snapshotSaveMs": 34,
+  "snapshotLoadMs": 5,
+  "restCallsSubtree": 0,
+  "memoryHeapMb": 9.8,
+  "cacheSizeBytes": 8062,
+  "exactStatus": "HIT",
+  "subtreeStatus": "SUBTREE",
+  "htmlBytes": 449
+}

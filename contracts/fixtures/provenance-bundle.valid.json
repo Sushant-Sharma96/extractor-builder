@@ -1,0 +1,14 @@
+{
+  "contractId": "ProvenanceBundle",
+  "suiteVersion": "1.0.0",
+  "bundleId": "prov-1",
+  "bindings": [
+    {
+      "bindingId": "b1",
+      "sourceNodeId": "1:2",
+      "irNodeId": "src:1:2",
+      "emitAnchorId": "emit:section:src:1:2",
+      "decisionId": "dec-html-tag-winner-1"
+    }
+  ]
+}

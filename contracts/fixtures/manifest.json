@@ -1,0 +1,34 @@
+{
+  "suiteVersion": "1.0.0",
+  "fixtures": [
+    { "file": "raw-design-document.valid.json", "schema": "raw-design-document.json", "contractId": "RawDesignDocument" },
+    { "file": "normalized-design-graph.valid.json", "schema": "normalized-design-graph.json", "contractId": "NormalizedDesignGraph" },
+    { "file": "fact.valid.json", "schema": "fact.json", "contractId": "Fact" },
+    { "file": "evidence.valid.json", "schema": "evidence.json", "contractId": "Evidence" },
+    { "file": "candidate.valid.json", "schema": "candidate.json", "contractId": "Candidate" },
+    { "file": "hypothesis.valid.json", "schema": "hypothesis.json", "contractId": "Hypothesis" },
+    { "file": "decision-record.winner.json", "schema": "decision-record.json", "contractId": "DecisionRecord", "decisionCase": "winner" },
+    { "file": "decision-record.abstain.json", "schema": "decision-record.json", "contractId": "DecisionRecord", "decisionCase": "abstain" },
+    { "file": "decision-record.overridden.json", "schema": "decision-record.json", "contractId": "DecisionRecord", "decisionCase": "overridden" },
+    { "file": "specialized-ir-envelope.layout.json", "schema": "specialized-ir-envelope.json", "contractId": "SpecializedIrEnvelope" },
+    { "file": "resolved-ir.valid.json", "schema": "resolved-ir.json", "contractId": "ResolvedIR" },
+    { "file": "emit-plan.valid.json", "schema": "emit-plan.json", "contractId": "EmitPlan" },
+    { "file": "artifact-set.valid.json", "schema": "artifact-set.json", "contractId": "ArtifactSet" },
+    { "file": "policy-profile.valid.json", "schema": "policy-profile.json", "contractId": "PolicyProfile" },
+    { "file": "job-fingerprint.valid.json", "schema": "job-fingerprint.json", "contractId": "CompileJobFingerprint" },
+    { "file": "quality-report.valid.json", "schema": "quality-report.json", "contractId": "QualityReport" },
+    { "file": "provenance-bundle.valid.json", "schema": "provenance-bundle.json", "contractId": "ProvenanceBundle" }
+  ],
+  "negativeFixtures": [
+    {
+      "file": "negative/decision-missing-status.json",
+      "schema": "decision-record.json",
+      "expect": "fail"
+    },
+    {
+      "file": "negative/fact-as-empty.json",
+      "schema": "fact.json",
+      "expect": "fail"
+    }
+  ]
+}

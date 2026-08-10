@@ -1,0 +1,29 @@
+{
+  "contractId": "PolicyProfile",
+  "suiteVersion": "1.0.0",
+  "profileId": "semantic-lean",
+  "profileVersion": "1.0.0",
+  "description": "Lower accept_min for landmark/tag upgrades; best-effort gates; still cautious on structure.",
+  "valuesAuthoritative": true,
+  "gateMode": "best_effort",
+  "thresholds": {
+    "accept_min": 0.55,
+    "margin_min": 0.08,
+    "fallback_below": 0.45,
+    "fail_closed_below": null,
+    "pattern_name_cap": 0.5
+  },
+  "budgets": {
+    "maxTimeMs": 120000,
+    "maxMemoryBytes": null,
+    "maxAssetBytes": null,
+    "maxDomNodes": null
+  },
+  "allowedEngineIds": [],
+  "allowedPackIds": [],
+  "flags": {
+    "authorizeInteractionJs": false,
+    "requireBehaviorCoverage": false,
+    "aggressiveAbstain": false
+  }
+}

@@ -1,0 +1,42 @@
+{
+  "contractId": "KnowledgeBundle",
+  "bundleId": "compiler-ui-ontology",
+  "version": "1.0.0",
+  "suiteVersion": "1.0.0",
+  "createdAt": "2026-07-18T00:00:00.000Z",
+  "description": "Minimal Phase 7 base ontology",
+  "layers": [],
+  "dependencies": [],
+  "entries": [
+    {
+      "entryId": "pattern:block.generic",
+      "kind": "pattern",
+      "aliases": ["generic-block"],
+      "matcherRefs": [],
+      "requiredEvidence": [],
+      "optionalEvidence": [],
+      "conflictsWith": [],
+      "obligations": [],
+      "emitHintsByPolicy": {},
+      "examples": []
+    },
+    {
+      "entryId": "motif:repeated-peer",
+      "kind": "motif",
+      "aliases": []
+    },
+    {
+      "entryId": "feature:equalGap",
+      "kind": "feature_def"
+    }
+  ],
+  "relations": [
+    {
+      "from": "pattern:block.generic",
+      "to": "motif:repeated-peer",
+      "type": "suggests"
+    }
+  ],
+  "packs": [],
+  "priors": []
+}

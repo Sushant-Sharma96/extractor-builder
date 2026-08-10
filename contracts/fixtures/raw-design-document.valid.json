@@ -1,0 +1,21 @@
+{
+  "contractId": "RawDesignDocument",
+  "suiteVersion": "1.0.0",
+  "documentId": "raw-demo-1",
+  "source": {
+    "kind": "figma",
+    "fileKey": "EXAMPLEFILEKEY",
+    "nodeId": "1:2",
+    "url": "https://www.figma.com/design/EXAMPLEFILEKEY/?node-id=1-2",
+    "fetchedAt": "2026-07-18T00:00:00.000Z",
+    "figmaVersion": null
+  },
+  "name": "Example Frame",
+  "document": {
+    "id": "1:2",
+    "name": "Example Frame",
+    "type": "FRAME",
+    "children": []
+  },
+  "metadata": {}
+}

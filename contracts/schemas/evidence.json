@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft-07/schema#",
+  "contractId": "Evidence",
+  "suiteVersion": "1.0.0",
+  "title": "Evidence",
+  "type": "object",
+  "required": ["evidenceId", "kind"],
+  "properties": {
+    "evidenceId": { "type": "string", "minLength": 1 },
+    "kind": {
+      "type": "string",
+      "enum": ["feature", "rule_hit", "graph_match", "override", "prior", "other"]
+    },
+    "ref": { "type": "string", "description": "Open reference (rule id, feature name, pattern id string, etc.)." },
+    "detail": { "type": "object", "additionalProperties": true }
+  },
+  "additionalProperties": false
+}

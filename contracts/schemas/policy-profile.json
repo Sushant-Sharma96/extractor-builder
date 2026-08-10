@@ -1,0 +1,51 @@
+{
+  "$schema": "https://json-schema.org/draft-07/schema#",
+  "contractId": "PolicyProfile",
+  "suiteVersion": "1.0.0",
+  "title": "PolicyProfile",
+  "description": "Profile identity + named slots. Threshold VALUES are Phase 5 (non-authoritative if present).",
+  "type": "object",
+  "required": ["contractId", "suiteVersion", "profileId"],
+  "properties": {
+    "contractId": { "const": "PolicyProfile" },
+    "suiteVersion": { "type": "string" },
+    "profileId": { "type": "string", "minLength": 1 },
+    "profileVersion": { "type": "string" },
+    "description": { "type": "string" },
+    "thresholds": {
+      "type": "object",
+      "description": "Named slots. Values optional/non-authoritative until Phase 5.",
+      "properties": {
+        "accept_min": { "type": ["number", "null"] },
+        "margin_min": { "type": ["number", "null"] },
+        "fallback_below": { "type": ["number", "null"] },
+        "fail_closed_below": { "type": ["number", "null"] },
+        "pattern_name_cap": { "type": ["number", "null"] }
+      },
+      "additionalProperties": false
+    },
+    "budgets": {
+      "type": "object",
+      "properties": {
+        "maxTimeMs": { "type": ["number", "null"] },
+        "maxMemoryBytes": { "type": ["number", "null"] },
+        "maxAssetBytes": { "type": ["number", "null"] },
+        "maxDomNodes": { "type": ["number", "null"] }
+      },
+      "additionalProperties": false
+    },
+    "allowedEngineIds": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "allowedPackIds": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "valuesAuthoritative": {
+      "type": "boolean",
+      "description": "Must be false in Phase 1 fixtures; Phase 5 sets true for shipping profiles."
+    }
+  },
+  "additionalProperties": false
+}

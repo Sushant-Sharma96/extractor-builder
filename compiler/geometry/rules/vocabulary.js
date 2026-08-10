@@ -36,6 +36,7 @@ const {
   EVIDENCE_GRID,
   EVIDENCE_SIDE_BY_SIDE,
   EVIDENCE_COLUMN_FLEX,
+  EVIDENCE_SIDE_BY_SIDE_COLUMN,
 } = require('../constants');
 
 // Same tolerances as Phase 0 (server/figma-build.js's proven legacy values).
@@ -102,6 +103,52 @@ function yOverlapRatio(a, b) {
   const overlap = Math.max(0, bot - top);
   const minH = Math.min(a.h, b.h);
   return minH > 0 ? overlap / minH : 0;
+}
+
+/** Direct symmetric counterpart of yOverlapRatio, for the column axis. */
+function xOverlapRatio(a, b) {
+  const left = Math.max(a.x, b.x);
+  const right = Math.min(a.x + a.w, b.x + b.w);
+  const overlap = Math.max(0, right - left);
+  const minW = Math.min(a.w, b.w);
+  return minW > 0 ? overlap / minW : 0;
+}
+
+/**
+ * Groups items into visual "rows" by Y-RANGE OVERLAP RATIO — deliberately
+ * looser than clusterRows() below, which exists for STRICT N×M grid
+ * recognition (near-identical top edges, ALIGN_TOL=2). Reading order needs a
+ * much more forgiving idea of "same row": real card rows routinely have
+ * mismatched heights (one card's description wraps an extra line, one has a
+ * taller image) that still read as one row to a human even when their top
+ * edges differ by dozens of px — confirmed on a real fixture (Figma file
+ * c0kt3mp76RoEiq3CFoeCHa node 39:9, "Why Participate?": two cards at y=190
+ * (h=323) and y=230 (h=226) are the same visual row — a 40px top-edge gap,
+ * but their Y-ranges fully overlap). Each candidate is compared against the
+ * FIRST item placed in a row (its anchor), mirroring evaluateSideBySideRow/
+ * -Column's own "anchor, not immediate neighbor" convention above — same
+ * 0.35 default threshold, for the same reason (server/figma-build.js's
+ * proven legacy value).
+ * Box shape matches yOverlapRatio's own native `{x,y,w,h}` (the canonical
+ * shape throughout this module — see e.g. withBoxes() above) — NOT the
+ * `{x,y,width,height}` shape some callers (e.g. structural-polish.js's
+ * orderChildrenVisualY) carry natively; those callers must map to `{w,h}`
+ * before calling this, exactly the mismatch that made a real, caught bug
+ * out of this function's first draft (see compiler/test/geometry.test.js's
+ * groupByRowOverlap unit test for the regression coverage).
+ * @param {Array<{box:{x:number,y:number,w:number,h:number}}>} items
+ *   — already sorted by box.y ascending
+ * @returns {Array<Array<object>>} rows, each an array of the original items,
+ *   in the same row-to-row order as the input (ascending Y)
+ */
+function groupByRowOverlap(items, threshold = 0.35) {
+  const rows = [];
+  for (const item of items) {
+    const row = rows.find((r) => yOverlapRatio(r[0].box, item.box) >= threshold);
+    if (row) row.push(item);
+    else rows.push([item]);
+  }
+  return rows;
 }
 
 // ─── Grid ────────────────────────────────────────────────────────────────
@@ -240,6 +287,54 @@ function evaluateSideBySideRow(parentId, children) {
   };
 }
 
+/**
+ * evaluateSideBySideColumn — the direct symmetric counterpart of
+ * evaluateSideBySideRow: 2+ siblings simply stacked top-to-bottom (X-overlap
+ * ratio against the topmost sibling >= 0.35) but not sharing a left edge, so
+ * Phase 0's edgesAligned(byY,'x') test misses them (e.g. a full-width row of
+ * cards below a narrower, independently-centered heading block — confirmed
+ * as a real, recurring shape via cross-corpus validation: 162 real
+ * containers across 5 independent Figma files, 63 previously falling
+ * through to mode:'unknown'/absolute with no DOM-order correction, 0
+ * regressions against the 99 already correctly resolved). Only the ROW half
+ * of this looser tier existed before; a plain vertical stack of differently
+ * sized blocks is at least as common a real design pattern.
+ * @returns {{ axis: 'column'|null, orderedIds: string[], gap: number|null, evidence: object[] }}
+ */
+function evaluateSideBySideColumn(parentId, children) {
+  const evidence = [];
+  const items = withBoxes(children);
+  const empty = { axis: null, orderedIds: [], gap: null, evidence };
+  if (items.length < 2) return empty;
+  if (hasAnyRealOverlap(items)) return empty;
+
+  const byY = [...items].sort((a, b) => a.box.y - b.box.y);
+  const gaps = [];
+  for (let i = 1; i < byY.length; i++) {
+    const g = byY[i].box.y - (byY[i - 1].box.y + byY[i - 1].box.h);
+    if (g < -ALIGN_TOL) return empty;
+    gaps.push(Math.max(0, g));
+    // Mirrors evaluateSideBySideRow: ratio measured against the topmost
+    // sibling, not just the immediate neighbor.
+    if (xOverlapRatio(byY[0].box, byY[i].box) < 0.35) return empty;
+  }
+
+  const gap = gaps.length ? gaps.reduce((a, b) => a + b, 0) / gaps.length : 0;
+
+  evidence.push({
+    kind: 'feature',
+    ref: EVIDENCE_SIDE_BY_SIDE_COLUMN,
+    detail: { parentId, gap: Number(gap.toFixed(2)) },
+  });
+
+  return {
+    axis: 'column',
+    orderedIds: byY.map((k) => k.nodeId),
+    gap,
+    evidence,
+  };
+}
+
 // ─── Column-flex scoring ───────────────────────────────────────────────────
 
 /** Decorative LINE/hairline only — not icons or photos (box-only test; the
@@ -371,8 +466,11 @@ module.exports = {
   GAP_TOL,
   DEFAULT_COLUMN_FLEX_MIN_SCORE,
   yOverlapRatio,
+  xOverlapRatio,
+  groupByRowOverlap,
   evaluateGrid,
   evaluateSideBySideRow,
+  evaluateSideBySideColumn,
   evaluateColumnFlex,
   // Exported for compiler/rulepack/packs/component-detect/geometry-rules.js
   // (Phase 2, docs/COMPILER_MIGRATION_BLUEPRINT.md) — reused rather than

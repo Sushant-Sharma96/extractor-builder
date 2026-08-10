@@ -59,6 +59,8 @@ const { indexGraph } = require('../layout/collect');
 const {
   boxOf,
   isChromeBgRefined,
+  isTextNode,
+  hasImageFill,
   detectCardGridUniformity,
   detectRowSetUniformity,
   largestUniformSizeCluster,
@@ -172,7 +174,28 @@ function unwrapChild(child, memberBox, axis, childrenOfFn, depth) {
   const memberSpan = spanDim(memberBox, axis);
   const childSpan = spanDim(child.box, axis);
   const spanFraction = memberSpan > 0 ? childSpan / memberSpan : 0;
-  const isWideWrapper = grandkids.length >= 2 && spanFraction >= WRAPPER_SPAN_FRACTION;
+  // Real, confirmed bug (Figma file eOwzPCQP0f3sAxzI0T0b9d, "Group 357" —
+  // the "Design" badge's own small icon glyph, 4 plain 10x10 rectangles
+  // forming a 2x2 grid pattern inside a 21x21 wrapper): the wrapper's span
+  // (21px) is ~95% of its 22px-tall parent member, comfortably clearing
+  // WRAPPER_SPAN_FRACTION (0.5) — so this purely decorative icon glyph got
+  // unwrapped exactly like a genuine "wrapper bundling real content
+  // columns" (this mechanism's actual intended case — see this function's
+  // header comment: Challenge Arena's row wrapping 4-5 real data columns).
+  // One of the 4 unwrapped rectangles then got pulled in as this member's
+  // resolved "column content" (isFreeformGridItem, grid-row placement)
+  // while its 3 identical siblings did not — losing its normal absolute
+  // position and rendering as an invisible, zero-size box, breaking the
+  // icon glyph. The real, generalizable distinction: a genuine content
+  // wrapper (table columns, image+title+description stacks) always
+  // contains SOME real text or image content; a decorative icon made of
+  // plain geometric shape primitives never does. Requiring at least one
+  // text/image grandkid before treating a child as a "wrapper to unwrap"
+  // closes this gap without narrowing the real Challenge Arena case at
+  // all (its bundled columns are genuine data cells, always containing
+  // real text).
+  const hasRealContent = grandkids.some((gc) => isTextNode(gc.node) || hasImageFill(gc.node));
+  const isWideWrapper = grandkids.length >= 2 && spanFraction >= WRAPPER_SPAN_FRACTION && hasRealContent;
   if (!isWideWrapper) return [child];
   return grandkids.flatMap((gc) => unwrapChild(gc, memberBox, axis, childrenOfFn, depth + 1));
 }
@@ -349,23 +372,42 @@ function detectFreeformLayout(graph, opts = {}) {
         });
       }
     });
-    // Single group-level inset (not per-member): Figma's real design keeps
-    // this uniform across every member (verified: Incentives' 5 cards all
-    // inset their content exactly 40px) — min() rather than e.g. the first
-    // item read (`cols[0]`, freeformGroupMemberDecls' old approach) so one
-    // stray outlier can't pull every member's padding inward; floored at 0
-    // like the pre-existing `Math.max(0, firstCol.x)` guard it replaces.
-    const crossInset = taggedItems.length
-      ? Math.max(0, Math.min(...taggedItems.map((t) => t.crossPos)))
-      : 0;
+    // Group-level inset (verified: Incentives' 5 cards all inset their
+    // content exactly 40px, uniformly) is the common case, but NOT a safe
+    // universal one: a member whose content mixes a full-bleed item (e.g. a
+    // photo flush with the card's own edge) with genuinely inset items (e.g.
+    // a title/date/avatar row indented 16px below it) has NO single inset
+    // value that's correct for both — a card-wide `padding-left` derived
+    // from the full-bleed item's own 0 offset (the min across ALL items)
+    // silently zeroes out the real inset every OTHER item needed (confirmed
+    // real bug: Figma file fYKUEGHAxVkJwn8CwvJCsp node 84:7, "Blogs" card 1 —
+    // the image sits at crossPos 0, but its date/title/avatar rows sit at
+    // crossPos ~16; the group-level min collapsed all of them to 0).
+    // Computed PER COLUMN (per Y-band, for axis:'row' groups) instead: each
+    // column gets its OWN min-across-its-own-items inset, so the image
+    // column correctly gets 0 while the text columns keep their real ~16px —
+    // still uniform ACROSS members (every member's Nth column shares the
+    // same content role in a genuine repeating pattern), just not forced
+    // uniform WITHIN one member's own different columns. min() (not e.g.
+    // cols[0]) still guards against one stray outlier pulling a column's own
+    // inset inward; floored at 0 like the group-level version it replaces.
+    const crossPosByMemberAndNode = new Map();
+    for (const t of taggedItems) crossPosByMemberAndNode.set(`${t.memberIndex}:${t.nodeId}`, t.crossPos);
 
     const clusters = clusterByPosition(taggedItems);
-    const columns = clusters.map((cl, i) => ({
-      columnId: `col:${i}`,
-      order: i,
-      x: cl.pos,
-      width: cl.size,
-    }));
+    const columns = clusters.map((cl, i) => {
+      const columnCrossPositions = [...cl.membersByIndex.entries()]
+        .map(([memberIndex, nodeId]) => crossPosByMemberAndNode.get(`${memberIndex}:${nodeId}`))
+        .filter((v) => Number.isFinite(v));
+      const columnCrossInset = columnCrossPositions.length ? Math.max(0, Math.min(...columnCrossPositions)) : 0;
+      return {
+        columnId: `col:${i}`,
+        order: i,
+        x: cl.pos,
+        width: cl.size,
+        crossInset: columnCrossInset,
+      };
+    });
 
     const members = orderedIds.map((mid, idx) => {
       const memberColumnMap = {};
@@ -454,7 +496,6 @@ function detectFreeformLayout(graph, opts = {}) {
       memberCount: orderedIds.length,
       columns,
       members,
-      crossInset,
       seedHint,
     });
 

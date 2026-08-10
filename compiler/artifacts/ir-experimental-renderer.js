@@ -38,8 +38,16 @@ const {
 } = require('../rulepack/packs/component-detect/geometry-rules');
 const { detectResponsive } = require('../responsive');
 const { buildDesignSkeleton, ROLE_DECORATIVE_CHROME } = require('../skeleton');
+const { detectComponents } = require('../components/detect');
 const { materializeHtml } = require('../emit/render/materialize-html');
-const { solidFillCss, paintCss, isPositionedAbsolute } = require('../emit/render/css-declarations');
+const { isPositionedAbsolute } = require('../emit/render/css-declarations');
+// docs/STYLE_RESOLVER_ARCHITECTURE.md Section 3.6 / Paint module — these
+// now all live in the Style Resolver (compiler/style), consumed directly
+// rather than via css-declarations.js's re-export.
+const {
+  solidFillCss, paintCss, boxShadowCss, blurFiltersCss,
+  imageFiltersCss, imageObjectPosition, resolveImageWash,
+} = require('../style');
 
 /**
  * Intersection-over-Union of two Figma boxes — the standard overlap metric
@@ -285,6 +293,48 @@ function sanitizeGridTrackString(value) {
 }
 
 /**
+ * Figma's Auto Layout `primaryAxisAlignItems` -> CSS `justify-content`.
+ * docs/COMPILER_REDESIGN_ROADMAP.md Phase 4. Real values confirmed present
+ * in this project's own cached corpus: `CENTER` (multiple real nodes,
+ * Figma files c0kt3mp76RoEiq3CFoeCHa/VWuDrw96Uc0xcXXHcEDZcQ) — `MIN`/`MAX`/
+ * `SPACE_BETWEEN` are documented Figma enum values with no confirmed real
+ * occurrence in this corpus yet, mapped anyway per Figma's own public
+ * schema rather than left unhandled for the next file that uses them.
+ * @param {*} value
+ * @returns {string|null}
+ */
+function justifyContentFor(value) {
+  switch (String(value || '').toUpperCase()) {
+    case 'MIN': return 'flex-start';
+    case 'CENTER': return 'center';
+    case 'MAX': return 'flex-end';
+    case 'SPACE_BETWEEN': return 'space-between';
+    default: return null;
+  }
+}
+
+/**
+ * Figma's Auto Layout `counterAxisAlignItems` -> CSS `align-items`. Real
+ * values confirmed present in this project's own cached corpus: `CENTER`
+ * and `MAX` (Figma file c0kt3mp76RoEiq3CFoeCHa node 1:443 — a 2-child
+ * HORIZONTAL row with real `counterAxisAlignItems:"MAX"`, confirmed
+ * rendered with the hardcoded `align-items:center` before this fix).
+ * `BASELINE` has no confirmed real occurrence yet, mapped per Figma's own
+ * public schema.
+ * @param {*} value
+ * @returns {string|null}
+ */
+function alignItemsFor(value) {
+  switch (String(value || '').toUpperCase()) {
+    case 'MIN': return 'flex-start';
+    case 'CENTER': return 'center';
+    case 'MAX': return 'flex-end';
+    case 'BASELINE': return 'baseline';
+    default: return null;
+  }
+}
+
+/**
  * Image-fill resolution — mirrors legacy's `imageRefOf()`/`imgUrl()`
  * (server/figma-build.js) which treats ANY node carrying an `IMAGE`-type
  * fill paint as an image, regardless of the node's own Figma `type`
@@ -297,9 +347,34 @@ function sanitizeGridTrackString(value) {
  * @param {{paints?: Array<{type?:string, visible?:boolean, imageRef?:string}>}} node
  * @returns {string|null}
  */
+function imagePaintOf(node) {
+  return (node.paints || []).find((p) => p && p.visible !== false && p.type === 'IMAGE') || null;
+}
+
 function imageRefOf(node) {
-  const f = (node.paints || []).find((p) => p && p.visible !== false && p.type === 'IMAGE');
+  const f = imagePaintOf(node);
   return f ? f.imageRef : null;
+}
+
+/**
+ * Figma's own image-fill scale mode ('FILL'/'FIT'/'CROP'/'TILE') — same
+ * paint object imageRefOf() already finds, just reading one more field off
+ * it; no new NDG ingestion needed (`node.paints` is `raw.fills` verbatim).
+ * Mapped to CSS `object-fit` in css-declarations.js. Real, confirmed bug
+ * this recovers: nothing ever set `object-fit` before, so EVERY image fill
+ * defaulted to the browser's own initial value (`fill`, which stretches to
+ * the box ignoring aspect ratio) regardless of Figma's real scale mode —
+ * invisible whenever a downloaded asset's own dimensions happened to match
+ * its box exactly, but real, visible distortion otherwise (Figma file
+ * fYKUEGHAxVkJwn8CwvJCsp node 86:779: a 320x80 source image in a 90x70 box,
+ * scaleMode:"FILL" — Figma's "Fill" is CSS `cover`, not CSS `fill`; the two
+ * share a name but mean opposite things).
+ * @param {{paints?: Array<{type?:string, visible?:boolean, scaleMode?:string}>}} node
+ * @returns {string|null}
+ */
+function imageScaleModeOf(node) {
+  const f = imagePaintOf(node);
+  return f ? f.scaleMode || null : null;
 }
 
 function subtreeContainsMember(nodeId, memberIdSet, childrenOfMap, byId, depth = 0) {
@@ -339,6 +414,7 @@ function classifyRowSetRow(rowId, fact, byId, childrenOfMap, skeletonByNodeId) {
   let chromeCornerRadius = null;
   let chromeStrokeCss = null;
   let chromeStrokeWeight = null;
+  let chromeStrokeAlign = null;
   // `rowBox`/`kidBox` are no longer needed for the chrome check itself (see
   // below), but the box-presence gates are kept exactly as before: a
   // box-less row or child was, and still is, skipped for member/passthrough
@@ -369,6 +445,14 @@ function classifyRowSetRow(rowId, fact, byId, childrenOfMap, skeletonByNodeId) {
           chromeStrokeCss = solidFillCss(kid.attributes && kid.attributes.strokes);
           chromeStrokeWeight = Number.isFinite(kid.geometry && kid.geometry.strokeWeight)
             ? kid.geometry.strokeWeight : null;
+          // docs/COMPILER_REDESIGN_ROADMAP.md Phase 8 (Style Resolver) —
+          // tracked strokeAlign bug fix: the chrome node's declared
+          // strokeAlign was captured nowhere before this, so lifting its
+          // stroke onto the visible member always fell through to
+          // rowSetRowDecls()'s hardcoded `border` (INSIDE-equivalent),
+          // silently downgrading a real OUTSIDE/CENTER stroke. Threaded
+          // through exactly like chromeStrokeCss/chromeStrokeWeight above.
+          chromeStrokeAlign = (kid.geometry && kid.geometry.strokeAlign) || null;
         }
         continue;
       }
@@ -379,7 +463,14 @@ function classifyRowSetRow(rowId, fact, byId, childrenOfMap, skeletonByNodeId) {
     }
   }
   return {
-    memberIdSet, passthroughIds, chromeIds, chromeBg, chromeCornerRadius, chromeStrokeCss, chromeStrokeWeight,
+    memberIdSet,
+    passthroughIds,
+    chromeIds,
+    chromeBg,
+    chromeCornerRadius,
+    chromeStrokeCss,
+    chromeStrokeWeight,
+    chromeStrokeAlign,
   };
 }
 
@@ -430,6 +521,7 @@ function classifyFreeformMember(memberId, leafIds, byId, childrenOfMap, skeleton
   let chromeCornerRadius = null;
   let chromeStrokeCss = null;
   let chromeStrokeWeight = null;
+  let chromeStrokeAlign = null;
 
   function markPassthroughChain(nodeId, depth) {
     if (leafIds.has(nodeId)) return true; // reached a resolved column leaf — stop, it's a grid item.
@@ -458,6 +550,10 @@ function classifyFreeformMember(memberId, leafIds, byId, childrenOfMap, skeleton
           chromeStrokeCss = solidFillCss(kid.attributes && kid.attributes.strokes);
           chromeStrokeWeight = Number.isFinite(kid.geometry && kid.geometry.strokeWeight)
             ? kid.geometry.strokeWeight : null;
+          // docs/COMPILER_REDESIGN_ROADMAP.md Phase 8 (Style Resolver) —
+          // same strokeAlign tracked-bug fix as classifyRowSetRow's
+          // identical addition, above.
+          chromeStrokeAlign = (kid.geometry && kid.geometry.strokeAlign) || null;
         }
         continue;
       }
@@ -465,7 +561,7 @@ function classifyFreeformMember(memberId, leafIds, byId, childrenOfMap, skeleton
     }
   }
   return {
-    chromeIds, chromeBg, chromeCornerRadius, chromeStrokeCss, chromeStrokeWeight, passthroughIds,
+    chromeIds, chromeBg, chromeCornerRadius, chromeStrokeCss, chromeStrokeWeight, chromeStrokeAlign, passthroughIds,
   };
 }
 
@@ -490,8 +586,19 @@ async function renderIrExperimental(document, opts = {}) {
   }
   const imageFillUrls = opts.imageFillUrls || {};
   const graphId = opts.graphId || `g:ir-experimental:${Date.now()}`;
-  const ws = createWorkspace();
-  const ndg = await materializeNormalizedDesignGraph({
+  // docs/COMPILER_REDESIGN_ROADMAP.md Phase 6 — additive, opt-in escape hatch
+  // for the architecture-contract violation compile.js's own `renderer` doc
+  // comment already names: this renderer re-materializes its own NDG rather
+  // than consuming a Kernel job's already-published graph
+  // (`job.materializeNormalizedDesignGraph()`, same underlying
+  // compiler/ndg function, same `{graph, events}` shape). No caller supplies
+  // `opts.precomputedNdg` yet — every existing call site is therefore
+  // byte-identical to before this change — but the renderer is now CAPABLE
+  // of accepting one, unblocking the next increment (threading compile.js's
+  // Kernel-materialized graph through emitArtifacts() once that graph's
+  // policy/graphId equivalence to this renderer's own default is verified).
+  const ws = opts.precomputedNdg ? null : createWorkspace();
+  const ndg = opts.precomputedNdg || await materializeNormalizedDesignGraph({
     workspace: ws,
     policy: { profileId: opts.policyProfileId || 'pixel-faithful' },
     document,
@@ -512,8 +619,22 @@ async function renderIrExperimental(document, opts = {}) {
   const rawNodesById = indexRawNodesById(document);
   const collapsedWrapperBoxByNodeId = collapsedWrapperBoxBySurvivorId(ndg.events, rawNodesById);
   const index = indexGraph(graph);
+  // `detectedGeometry` stays unconditional even when opts.precomputedInterpretations
+  // is supplied below — it also feeds detectComponentGeometry/Skeleton
+  // further down (a separate purpose from LayoutIR), so it can't be skipped
+  // just because the interpretGraph() call itself is.
   const detectedGeometry = detectGeometry(graph, {});
-  const interpretations = interpretGraph(graph, index, {
+  // docs/COMPILER_REDESIGN_ROADMAP.md Phase 6, increment 4 — same additive,
+  // opt-in escape hatch as opts.precomputedNdg/opts.precomputedComponentRecognition
+  // above, for the LayoutIR slice: `compiler/layout/materialize.js`'s
+  // `materializeLayoutIR()` (the Kernel job's `job.projectLayoutIR()`) calls
+  // this EXACT SAME `interpretGraph(graph, index, {recognitionHintsByNode})`
+  // and exposes its return value verbatim as `interpretations` on its own
+  // result — so a caller that already has a Kernel-projected LayoutIR could
+  // hand this renderer that slice's `interpretations` directly. No caller
+  // supplies opts.precomputedInterpretations yet, so every existing call
+  // site is byte-identical to before this change.
+  const interpretations = opts.precomputedInterpretations || interpretGraph(graph, index, {
     recognitionHintsByNode: detectedGeometry.recognitionHintsByNode,
   });
   const interpByNodeId = new Map(interpretations.map((i) => [i.nodeId, i]));
@@ -523,8 +644,6 @@ async function renderIrExperimental(document, opts = {}) {
     geometryCandidatesByNode[c.nodeId] = c;
   }
   const detectedComponent = detectComponentGeometry(graph, { geometryCandidatesByNode });
-  const cardByNodeId = new Map((detectedComponent.cardFacts || []).map((c) => [c.nodeId, c]));
-  const bannerByNodeId = new Map((detectedComponent.bannerFacts || []).map((b) => [b.nodeId, b]));
 
   // Design Skeleton (docs/FIGMA_DESIGN_MODEL_ARCHITECTURE_RESEARCH.md Part 3)
   // — built once, here, so this renderer consumes it rather than
@@ -539,7 +658,33 @@ async function renderIrExperimental(document, opts = {}) {
   // comment). Role classification isn't consumed by this renderer yet —
   // this is an incremental wiring step, not the full migration.
   const byId = new Map(graph.nodes.map((n) => [n.id, n]));
-  const designSkeleton = buildDesignSkeleton(graph, { componentDetected: detectedComponent });
+  // docs/COMPILER_REDESIGN_ROADMAP.md Phase 3 — the FULL detectComponents()
+  // result (definitions/instances/claimedNodeIds), distinct from
+  // `detectedComponent` above (detectComponentGeometry's narrower
+  // card/banner/divider/row-set shape facts, already threaded through as
+  // `componentDetected`) — see buildDesignSkeleton's own doc comment for
+  // why these two are deliberately different names, not a typo.
+  // docs/COMPILER_REDESIGN_ROADMAP.md Phase 6, increment 3 — same additive,
+  // opt-in escape hatch as opts.precomputedNdg above, for the ComponentIR
+  // slice (`compiler/components/project.js`'s `projectComponentIR()`, which
+  // wraps this exact `detectComponents()` call). No caller supplies
+  // `opts.precomputedComponentRecognition` yet, so every existing call site
+  // is byte-identical to before. NOTE — deliberately NOT yet wiring the real
+  // Kernel-projected ComponentIR through: `projectComponentIR()` can pass a
+  // real `layoutIr` into `detectComponents()` (see project.js's own
+  // `opts.layoutIr` param), which this renderer's own direct call never
+  // supplies — so the two call sites are not proven equivalent yet. Actually
+  // threading a live value through is a separate, later increment requiring
+  // its own verification of whether `layoutIr`-informed detection changes
+  // real output; this increment only adds the capability, matching this
+  // phase's "refactor first, behavior unchanged" rule.
+  const componentRecognition = opts.precomputedComponentRecognition
+    || detectComponents(graph, { componentGeometryDetected: detectedComponent });
+  const designSkeleton = buildDesignSkeleton(graph, {
+    componentDetected: detectedComponent,
+    componentRecognition,
+    geometryDetected: detectedGeometry,
+  });
   const skeletonByNodeId = new Map(designSkeleton.nodes.map((n) => [n.nodeId, n]));
   const freeformGroups = designSkeleton.freeformGroups || [];
   const freeformClaimedNodeIds = new Set();
@@ -554,7 +699,7 @@ async function renderIrExperimental(document, opts = {}) {
   // group are skipped here (mutual exclusion, same shape as the existing
   // row-set/card-grid mutual-exclusion check) — the generalized mechanism,
   // wired below, takes over for that node instead.
-  const rowSetFacts = (detectedComponent.rowSetFacts || []).filter(
+  const rowSetFacts = (designSkeleton.rowSetFacts || []).filter(
     (r) => !freeformClaimedNodeIds.has(r.nodeId)
   );
   const rowSetContainerByNodeId = new Map(rowSetFacts.map((r) => [r.nodeId, r]));
@@ -568,10 +713,10 @@ async function renderIrExperimental(document, opts = {}) {
     }
     for (const rowId of fact.orderedChildIds || []) {
       const {
-        passthroughIds, chromeIds, chromeBg, chromeCornerRadius, chromeStrokeCss, chromeStrokeWeight,
+        passthroughIds, chromeIds, chromeBg, chromeCornerRadius, chromeStrokeCss, chromeStrokeWeight, chromeStrokeAlign,
       } = classifyRowSetRow(rowId, fact, byId, index.childrenOf, skeletonByNodeId);
       rowSetRowInfoByNodeId.set(rowId, {
-        fact, chromeBg, chromeCornerRadius, chromeStrokeCss, chromeStrokeWeight, hasChrome: chromeIds.length > 0,
+        fact, chromeBg, chromeCornerRadius, chromeStrokeCss, chromeStrokeWeight, chromeStrokeAlign, hasChrome: chromeIds.length > 0,
       });
       for (const id of passthroughIds) rowSetPassthroughByNodeId.add(id);
       for (const id of chromeIds) rowSetChromeHiddenByNodeId.add(id);
@@ -595,10 +740,10 @@ async function renderIrExperimental(document, opts = {}) {
     for (const member of group.members) {
       const leafIds = new Set(Object.values(member.memberColumnMap).filter(Boolean));
       const {
-        chromeIds, chromeBg, chromeCornerRadius, chromeStrokeCss, chromeStrokeWeight, passthroughIds,
+        chromeIds, chromeBg, chromeCornerRadius, chromeStrokeCss, chromeStrokeWeight, chromeStrokeAlign, passthroughIds,
       } = classifyFreeformMember(member.nodeId, leafIds, byId, index.childrenOf, skeletonByNodeId);
       freeformMemberByNodeId.set(member.nodeId, {
-        group, member, chromeBg, chromeCornerRadius, chromeStrokeCss, chromeStrokeWeight,
+        group, member, chromeBg, chromeCornerRadius, chromeStrokeCss, chromeStrokeWeight, chromeStrokeAlign,
       });
       for (const id of chromeIds) freeformChromeHiddenByNodeId.add(id);
       for (const id of passthroughIds) freeformPassthroughByNodeId.add(id);
@@ -625,7 +770,13 @@ async function renderIrExperimental(document, opts = {}) {
         if (freeformClaimedNodeIds.has(nodeId)) continue;
         freeformGridItemIds.add(nodeId);
         const col = member.columns.find((c) => c.columnId === columnId);
-        if (col) freeformPlacementByNodeId.set(nodeId, { axis: group.axis, order: col.order });
+        // crossInset is now PER COLUMN (compiler/freeform-layout/detect.js's
+        // own comment on why a single group-level value silently zeroed out
+        // a real inset whenever one column happened to be full-bleed) —
+        // threaded straight through to this leaf's own placement so
+        // freeformGridPlacementDecls can apply it to just this leaf, not the
+        // whole member.
+        if (col) freeformPlacementByNodeId.set(nodeId, { axis: group.axis, order: col.order, crossInset: col.crossInset });
       }
     }
   }
@@ -655,7 +806,19 @@ async function renderIrExperimental(document, opts = {}) {
       })),
     },
   };
-  const rawDetectedResponsive = detectResponsive(graph, { layoutIr: layoutIrLike, policy: {} });
+  // docs/COMPILER_REDESIGN_ROADMAP.md Phase 6, increment 5 — same additive,
+  // opt-in escape hatch as opts.precomputedNdg/precomputedComponentRecognition/
+  // precomputedInterpretations above, for the ResponsiveIR slice:
+  // `compiler/responsive/materialize.js`'s `materializeResponsiveIR()` (the
+  // Kernel job's `job.projectResponsiveIR()`) calls this exact same
+  // `detectResponsive()` and exposes its return value as `.detected`. No
+  // caller supplies opts.precomputedResponsive yet, so every existing call
+  // site is byte-identical to before. Substituted at the RAW stage (before
+  // the nodeId remap below) so that remap applies uniformly regardless of
+  // whether the value came from precomputed input or internal computation —
+  // a precomputed value doesn't need to pre-apply it itself.
+  const rawDetectedResponsive = opts.precomputedResponsive
+    || detectResponsive(graph, { layoutIr: layoutIrLike, policy: {} });
   // detectResponsive() (compiler/responsive/detect.js) keys every adaptation
   // by the NDG graph node's OWN id (compiler/ndg/ids.js's stableCompileId(),
   // literally `src:${sourceNodeId}`) — but the render tree's own `nodeId`
@@ -689,8 +852,15 @@ async function renderIrExperimental(document, opts = {}) {
   function buildRenderNode(node, parentBox, parentAttrs) {
     const interp = interpByNodeId.get(node.id);
     const top = interp && interp.modeCandidates && interp.modeCandidates[0];
-    const cardFact = cardByNodeId.get(node.id);
-    const bannerFact = bannerByNodeId.get(node.id);
+    // docs/COMPILER_REDESIGN_ROADMAP.md Phase 6 — read straight off Skeleton's
+    // already-published per-node fact (compiler/skeleton/build.js's
+    // cardFactByNodeId/bannerFactByNodeId are the identical Map construction
+    // over the identical `detectedComponent.cardFacts`/`bannerFacts` arrays
+    // this file used to re-derive its own copy of) rather than maintaining a
+    // second, parallel Map built directly from the raw detector output.
+    const skelEntry = skeletonByNodeId.get(node.id);
+    const cardFact = skelEntry && skelEntry.cardFact;
+    const bannerFact = skelEntry && skelEntry.bannerFact;
     const rowSetContainerFact = rowSetContainerByNodeId.get(node.id);
     const rowSetRowInfo = rowSetRowInfoByNodeId.get(node.id);
     const isRowSetPassthrough = rowSetPassthroughByNodeId.has(node.id);
@@ -724,7 +894,31 @@ async function renderIrExperimental(document, opts = {}) {
     // pre-existing text-color behavior untouched no matter what a node's
     // paints array happens to contain.
     const isTextNode = String(node.type || '').toUpperCase() === 'TEXT';
-    const imageRef = !isTextNode ? imageRefOf(node) : null;
+    const imagePaint = !isTextNode ? imagePaintOf(node) : null;
+    const imageRef = imagePaint ? imagePaint.imageRef : null;
+    const imageScaleMode = imageRef ? imagePaint.scaleMode || null : null;
+    // docs/PAINT_ARCHITECTURE_RESEARCH.md Section 1.11/1.12, docs/
+    // PAINT_FEATURE_CENSUS.md Section 8 — real, non-speculative: 41 real
+    // imageTransform occurrences in the corpus, always non-identity.
+    // Resolves object-position only (a real, verifiable improvement over
+    // always-centered); the matrix's own scale factor has no <img>
+    // object-fit equivalent — see resolveImagePosition's own doc comment.
+    const imageObjectPositionCss = imageRef ? imageObjectPosition(imagePaint.imageTransform) : null;
+    // Section 1.13 / Section 8 — real, 19 occurrences in the corpus.
+    const imageFilterCss = imageRef ? imageFiltersCss(imagePaint.filters) : null;
+    // docs/PAINT_ARCHITECTURE_RESEARCH.md — the SOLID+IMAGE multi-fill case
+    // (3 real occurrences, docs/PAINT_FEATURE_CENSUS.md Section 1). Only
+    // `.opacity` is rendered today (a real `<img>` element supports CSS
+    // `opacity` directly, no structural change needed). `.washBehind` (the
+    // solid/gradient fill beneath the image) is resolved but deliberately
+    // NOT yet rendered — expressing an opaque color BEHIND a translucent
+    // `<img>` requires a wrapper element (`<div style="background:...">
+    // <img style="opacity:...">`), a real DOM-structure change out of
+    // scope for this pass; see docs/PAINT_ARCHITECTURE_RESEARCH.md Section
+    // 6, still explicitly an open, undecided question. Carried through so a
+    // future increment building that wrapper doesn't need to re-derive it.
+    const imageWash = imageRef ? resolveImageWash(node.paints, node.box) : null;
+    const blurFilters = blurFiltersCss(node.attributes && node.attributes.effects);
     // A Figma VECTOR node (icon/arrow/decorative path — never has an IMAGE
     // paint, `imageRefOf` never matches it) has real path geometry the
     // server-side SVG reconstruction (`server/figma-generate.js`'s
@@ -809,15 +1003,54 @@ async function renderIrExperimental(document, opts = {}) {
       }
     }
     const mode = resolvedMode;
+    // docs/COMPILER_REDESIGN_ROADMAP.md Phase 4 — Figma's own declared
+    // Auto Layout alignment (primaryAxisAlignItems/counterAxisAlignItems),
+    // resolved to real CSS justify-content/align-items instead of the
+    // hardcoded 'center'/'flex-start' constants css-declarations.js's
+    // modeDecls() has always used regardless of what Figma actually
+    // declares — confirmed real, live bug: Figma file c0kt3mp76RoEiq3CFoeCHa
+    // node 1:443, a 2-child HORIZONTAL row with real
+    // counterAxisAlignItems:"MAX", rendered with the hardcoded
+    // align-items:center instead of the declared flex-end. Only resolved
+    // for flow-row/flow-column (the two modes modeDecls() actually applies
+    // align-items/justify-content to) — null for every other mode, and
+    // modeDecls() falls back to today's exact hardcoded default whenever
+    // the resolved value is null, so absent/legacy data renders unchanged.
+    const justifyContent = (mode === 'flow-row' || mode === 'flow-column')
+      ? justifyContentFor(nodeAttrs.primaryAxisAlignItems)
+      : null;
+    const alignItems = (mode === 'flow-row' || mode === 'flow-column')
+      ? alignItemsFor(nodeAttrs.counterAxisAlignItems)
+      : null;
     const layoutChoice = {
       mode,
       gap: interp ? interp.gap : null,
       padding: interp ? interp.padding : null,
+      justifyContent,
+      alignItems,
       fillCss: solidFillCss(node.paints),
       // TEXT nodes' own fill paint is the font color, not a box background —
       // see css-declarations.js's modeDecls(), which reads this flag to emit
       // `color` instead of `background-color` for the same fillCss value.
       isText: String(node.type || '').toUpperCase() === 'TEXT',
+      // Figma's own image-fill scale mode — see imageScaleModeOf()'s own
+      // comment for the full real-bug writeup (a 320x80 source image forced
+      // into a 90x70 box with no aspect-ratio preservation at all, since
+      // nothing ever set CSS `object-fit` before).
+      imageScaleMode,
+      // docs/PAINT_ARCHITECTURE_RESEARCH.md Section 1.11 — real imageTransform
+      // crop/offset data, resolved to object-position (see this file's own
+      // computation above for the documented scale-vs-position limitation).
+      imageObjectPositionCss,
+      // docs/PAINT_ARCHITECTURE_RESEARCH.md Section 1.13 — real image
+      // adjustment filters (saturation/contrast/exposure/temperature/tint).
+      imageFilterCss,
+      // docs/PAINT_ARCHITECTURE_RESEARCH.md — SOLID+IMAGE wash case.
+      // `.opacity` is rendered (see this file's own computation comment
+      // above); `.washBehind` is resolved but not yet rendered (wrapper
+      // element needed, deliberately deferred).
+      imageOpacity: imageWash ? imageWash.opacity : null,
+      imageWashBehind: imageWash ? imageWash.washBehind : null,
       // A node's own corner-radius/stroke, read generically off NDG's ingest
       // for EVERY node — not gated on card/freeform-leaf recognition (see
       // modeDecls()'s own comment on why: real bug, a repeating-but-
@@ -843,6 +1076,26 @@ async function renderIrExperimental(document, opts = {}) {
       // own — survives collapse instead).
       cornerRadius: (!svgForNode && Number.isFinite(node.geometry && node.geometry.cornerRadius))
         ? node.geometry.cornerRadius
+        : null,
+      // docs/COMPILER_REDESIGN_ROADMAP.md Phase 5.5 / Section 6.3 — per-
+      // corner mixed radius. Previously consulted ONLY by ndg/build.js's
+      // hasPaintSignal (structural collapse-protection), never for its own
+      // actual visual meaning — see css-declarations.js's modeDecls() for
+      // the CSS border-radius mapping (Figma's own [TL,TR,BR,BL] order is
+      // already CSS border-radius's own shorthand order, no reordering
+      // needed).
+      rectangleCornerRadii: (!svgForNode && Array.isArray(node.geometry && node.geometry.rectangleCornerRadii))
+        ? node.geometry.rectangleCornerRadii
+        : null,
+      // docs/STYLE_RESOLVER_ARCHITECTURE.md Section 3.4 — ingested since
+      // ndg/ingest.js but never threaded into layoutChoice at all before
+      // this. Resolved (compiler/style's resolveShape()) but intentionally
+      // not yet rendered — no CSS primitive exists for Figma's continuous
+      // "squircle" corner curve without a computed superellipse SVG path,
+      // and no real fixture justifies that investment. Carried through so
+      // a future consumer doesn't need to re-read raw NDG data for it.
+      cornerSmoothing: (!svgForNode && Number.isFinite(node.geometry && node.geometry.cornerSmoothing))
+        ? node.geometry.cornerSmoothing
         : null,
       // Unlike `paints` (top-level on the graph node, compiler/ndg/build.js),
       // `strokes` is nested under `attributes.strokes` there — verified
@@ -923,6 +1176,21 @@ async function renderIrExperimental(document, opts = {}) {
       nodeOpacity: Number.isFinite(node.geometry && node.geometry.opacity)
         ? node.geometry.opacity
         : null,
+      // Figma DROP_SHADOW/INNER_SHADOW effects -> CSS box-shadow — see
+      // css-declarations.js's boxShadowCss() for the full mapping. Ingested
+      // at ndg/ingest.js since this session's earlier work (node.attributes.
+      // effects = raw.effects verbatim) but never consumed anywhere until
+      // now — confirmed real bug: Figma file fYKUEGHAxVkJwn8CwvJCsp node
+      // 86:64 etc. each carry a genuine DROP_SHADOW, but zero elements on
+      // the rendered page ever had any box-shadow computed style.
+      boxShadowCss: boxShadowCss(node.attributes && node.attributes.effects),
+      // docs/COMPILER_REDESIGN_ROADMAP.md Phase 5.5 / Section 6.4 —
+      // LAYER_BLUR/BACKGROUND_BLUR, the two effect types boxShadowCss()
+      // deliberately excludes (a different CSS mechanism, filter/
+      // backdrop-filter, not box-shadow). Same "ingested since ndg/
+      // ingest.js, never consumed until now" pattern as boxShadowCss above.
+      filterCss: blurFilters.filter,
+      backdropFilterCss: blurFilters.backdropFilter,
       // Real-data audit: 56 rotated nodes, ALL exactly ±90deg or ±180deg —
       // but the 2 that are ±90deg are BOTH type GROUP, and Figma's own
       // `absoluteBoundingBox` for a rotated node is already the POST-
@@ -964,8 +1232,21 @@ async function renderIrExperimental(document, opts = {}) {
       if (Number.isFinite(attrs.lineHeightPx)) layoutChoice.lineHeight = attrs.lineHeightPx;
       if (attrs.textCase) layoutChoice.textCase = attrs.textCase;
       // See ingest.js's textAutoResize comment — a "WIDTH_AND_HEIGHT" box is
-      // sized to its own single-line text, so it must never wrap.
-      if (attrs.textAutoResize === 'WIDTH_AND_HEIGHT') layoutChoice.textNoWrap = true;
+      // normally sized to its own single-line text, so it must never wrap —
+      // but only when the CAPTURED box height is actually consistent with
+      // one line. Real, confirmed bug (Figma file fYKUEGHAxVkJwn8CwvJCsp,
+      // "Web Development"/"Cloud Computing" in the "Explore Hackathons"
+      // section): both are flagged textAutoResize:"WIDTH_AND_HEIGHT", but
+      // their own box height (40px) is exactly 2x their line-height (20px)
+      // — Figma's own rendering already wraps them onto 2 lines despite the
+      // "auto width" flag, and forcing nowrap overflowed the text past its
+      // narrower-than-single-line box width (95px vs the ~131px one line
+      // needs). 1.5x line-height is a tolerance for padding/rounding, not a
+      // precise line count — it only needs to catch the clearly-multi-line
+      // case, not draw an exact boundary.
+      const looksSingleLine = !Number.isFinite(attrs.lineHeightPx) || !Number.isFinite(node.box && node.box.height)
+        || node.box.height <= attrs.lineHeightPx * 1.5;
+      if (attrs.textAutoResize === 'WIDTH_AND_HEIGHT' && looksSingleLine) layoutChoice.textNoWrap = true;
       // Ingested since NDG's own ingest.js, never read anywhere until now —
       // real, confirmed bug (Figma "Why Participate?"): every heading is
       // LEFT (default, invisible either way since headings are single-line
@@ -1015,8 +1296,23 @@ async function renderIrExperimental(document, opts = {}) {
     // exactly like isRowSetGridItem/isFreeformGridItem above.
     const isDisplayContentsPassthrough = isRowSetPassthrough || isFreeformPassthrough;
     const parentHasAutoLayout = !!(parentAttrs && parentAttrs.layoutMode);
+    // `mode === 'unknown'` used to be a THIRD trigger here alongside the two
+    // legitimate ones — but 'unknown' only means "nothing to say about how
+    // THIS node arranges its OWN children" (inevitable for every leaf: no
+    // children, no arrangement signal), which is an unrelated question to
+    // whether THIS node needs absolute placement WITHIN ITS PARENT (exactly
+    // what this whole block's own comment above says). Confirmed as a real,
+    // pervasive bug via cross-corpus audit: 183 of 244 nodes (75%) sitting
+    // directly inside a REAL declared Auto Layout parent were being forced
+    // position:absolute at (0,0)-relative-to-parent purely because their own
+    // mode was 'unknown' — invisible when such a node happened to be its
+    // row's only/first child (absolute (0,0) coincides with where flex would
+    // have put it anyway), but a real, visible overlap the moment a sibling
+    // in the same row IS a normal flex item (real bug: Figma node 84:12, the
+    // "Blogs" section's avatar image, rendered position:absolute;left:0;top:0
+    // directly on top of its flex sibling, the name/title text stack).
     if (
-      (mode === 'absolute' || mode === 'unknown' || !parentHasAutoLayout) && effectiveBox && parentBox
+      (mode === 'absolute' || !parentHasAutoLayout) && effectiveBox && parentBox
       && !isRowSetGridItem && !isFreeformGridItem && !isDisplayContentsPassthrough && !isFlowSafeFreeformMember
       && !hasRealGridPlacement
     ) {
@@ -1024,6 +1320,66 @@ async function renderIrExperimental(document, opts = {}) {
       layoutChoice.top = effectiveBox.y - parentBox.y;
       if (Number.isFinite(effectiveBox.width)) layoutChoice.width = effectiveBox.width;
       if (Number.isFinite(effectiveBox.height)) layoutChoice.height = effectiveBox.height;
+    } else if (parentHasAutoLayout && effectiveBox && !isRowSetGridItem && !isFreeformGridItem
+      && !isDisplayContentsPassthrough && !isFlowSafeFreeformMember && !hasRealGridPlacement) {
+      // A normal flex/grid item of a REAL Auto Layout parent (no left/top —
+      // the parent's own display:flex/grid places it) whose own `mode`
+      // simply isn't one of flow-row/flow-column/grid-track (true of every
+      // leaf, and of any container whose own children arrangement couldn't
+      // be classified) — still needs its captured width/height preserved as
+      // a sizing hint, exactly like isFlowSafeFreeformMember's already-
+      // proven "min-, never a hard dimension" reasoning (see that flag's own
+      // comment below), or it would collapse to whatever its own content
+      // naturally sizes to instead of matching Figma. Deliberately reuses
+      // the SAME css-declarations.js min-width/min-height emission path via
+      // its own independent flag (realAutoLayoutFlowChild) rather than
+      // freeformFlowSafeMember itself, keeping the two mechanisms separately
+      // auditable even though the CSS effect is the same.
+      //
+      // Real image content (isImageFill — an actual <img>) is a DIFFERENT
+      // case from that: an <img> has its own intrinsic size and, unlike
+      // text, never needs a "measured box vs. rendered size" escape hatch —
+      // min-width/min-height alone leaves it UNCONSTRAINED above that floor,
+      // so it renders at its raw downloaded pixel dimensions instead of
+      // Figma's box (real bug, caught by direct browser measurement: the
+      // "Blogs" avatar photo, min-height/width:40px only, rendered at
+      // 223x149 — its own source image's native size). A real <img> needs
+      // both dimensions HARD, exactly like the absolute-position branch
+      // above already does for its own `width` (never `min-width`).
+      if (isImageFill) {
+        if (Number.isFinite(effectiveBox.width)) layoutChoice.width = effectiveBox.width;
+        if (Number.isFinite(effectiveBox.height)) layoutChoice.height = effectiveBox.height;
+        layoutChoice.hardImageSize = true;
+      } else {
+        if (Number.isFinite(effectiveBox.width)) layoutChoice.width = effectiveBox.width;
+        if (Number.isFinite(effectiveBox.height)) layoutChoice.height = effectiveBox.height;
+        layoutChoice.realAutoLayoutFlowChild = true;
+        // docs/COMPILER_REDESIGN_ROADMAP.md Phase 1.5 — `interp.sizing` is
+        // computed correctly by layout/interpret.js's sizingAxis() (reading
+        // Figma's own real `layoutSizingHorizontal`/`Vertical`: FILL/HUG/
+        // FIXED) but was never read here, so EVERY real-Auto-Layout flow
+        // child got the captured `effectiveBox` pixel size as a `min-width`/
+        // `min-height` floor above, regardless of what Figma actually
+        // declared — confirmed real bug via direct browser measurement on
+        // two separate files: a FILL-sized hero row (Figma file
+        // oPJPuHvvZOPo4nkzVxr11M node 43:3, captured at 1192px for a 1440px
+        // canvas) overflowed the page the moment the rendered viewport was
+        // narrower than that one captured width, and the same mechanism
+        // produced the non-fluid `.group-272` box reported for "Group 357".
+        // Threading the already-correct value through here — rather than
+        // recomputing or approximating it — is the direct fix; see
+        // css-declarations.js's modeDecls() for how `sizingHorizontal`/
+        // `sizingVertical`/`parentAxis` below are consumed.
+        if (interp && interp.sizing) {
+          layoutChoice.sizingHorizontal = interp.sizing.horizontal || null;
+          layoutChoice.sizingVertical = interp.sizing.vertical || null;
+        }
+        layoutChoice.parentAxis = String(parentAttrs.layoutMode || '').toUpperCase() === 'HORIZONTAL'
+          ? 'row'
+          : String(parentAttrs.layoutMode || '').toUpperCase() === 'VERTICAL'
+            ? 'column'
+            : null;
+      }
     }
     // A flow-safe freeform member is a REAL flex child of its (now
     // flex-container) parent — no left/top at all, since flex placement
@@ -1073,6 +1429,7 @@ async function renderIrExperimental(document, opts = {}) {
         chromeCornerRadius: rowSetRowInfo.chromeCornerRadius,
         chromeStrokeCss: rowSetRowInfo.chromeStrokeCss,
         chromeStrokeWeight: rowSetRowInfo.chromeStrokeWeight,
+        chromeStrokeAlign: rowSetRowInfo.chromeStrokeAlign,
         // The row's own absolute box — computeRowSetColumns() (geometry-
         // rules.js) already computes each column's real, cross-row-median
         // absolute x; without the row's own box to subtract against,
@@ -1104,6 +1461,17 @@ async function renderIrExperimental(document, opts = {}) {
         leadingOffset: flowSafety ? flowSafety.leadingOffset : 0,
         crossAxisOffset: flowSafety ? flowSafety.crossAxisOffset : 0,
       };
+      // `fluidAbsoluteWidth` is NOT decided here — see the sibling-safety
+      // check after `renderedKids` is built, below. A flowSafe ROW-axis
+      // group's fixed-width members can only safely wrap onto extra lines
+      // (growing this container taller than Figma's own captured height) if
+      // NO sibling is absolutely positioned below it relying on that
+      // original height — real, confirmed bug (Figma file
+      // fYKUEGHAxVkJwn8CwvJCsp node 50:2, "Incentives"): making BOTH of its
+      // 2 stacked card rows wrap unconditionally grew the first row taller
+      // at a narrow viewport, and the second row (fixed `top:565px`, sized
+      // for the ORIGINAL unwrapped row-1 height) rendered on top of it —
+      // visually overlapping, garbled text. See below for the safe scoping.
     }
     if (freeformMemberFact) {
       layoutChoice.freeformGroupMember = {
@@ -1113,7 +1481,7 @@ async function renderIrExperimental(document, opts = {}) {
         chromeCornerRadius: freeformMemberFact.chromeCornerRadius,
         chromeStrokeCss: freeformMemberFact.chromeStrokeCss,
         chromeStrokeWeight: freeformMemberFact.chromeStrokeWeight,
-        crossInset: freeformMemberFact.group.crossInset,
+        chromeStrokeAlign: freeformMemberFact.chromeStrokeAlign,
       };
     }
     if (isFreeformChromeHidden) {
@@ -1136,6 +1504,23 @@ async function renderIrExperimental(document, opts = {}) {
     if (isFreeformGridItem && node.geometry && Number.isFinite(node.geometry.cornerRadius)) {
       layoutChoice.freeformLeafCornerRadius = node.geometry.cornerRadius;
     }
+    // A freeform-layout-ir grid-item TEXT leaf never receives a width from
+    // either width-assignment branch above (both explicitly exclude
+    // isFreeformGridItem so a real offset/sizing hint isn't double-applied
+    // on top of the grid's own placement) — so it wraps against its single-
+    // column grid track's full width instead of Figma's own measured text
+    // box. Real, confirmed bug (Figma file fYKUEGHAxVkJwn8CwvJCsp node 50:2,
+    // "Incentives"): every card description paragraph and the "Build Real-
+    // World AI Applications" heading wrap one word later than Figma because
+    // their emitted CSS class has no width/max-width at all. `node.box.width`
+    // is Figma's own already-ingested wrap-fit box — read straight off the
+    // leaf, never invented, and scoped to text only (a non-text grid-item
+    // leaf, e.g. a chip/button, legitimately wants to size to its own
+    // content or cell, not a captured pixel width). See
+    // freeformLeafTextWidthDecls (css-declarations.js) for the CSS side.
+    if (isFreeformGridItem && layoutChoice.isText && node.box && Number.isFinite(node.box.width)) {
+      layoutChoice.freeformLeafTextMaxWidth = node.box.width;
+    }
 
     let kids = (index.childrenOf.get(node.id) || []).map((k) => byId.get(k.id)).filter(Boolean);
     // A flow-safe freeform container's children must be in real visual
@@ -1151,8 +1536,31 @@ async function renderIrExperimental(document, opts = {}) {
     // build.js's resolveReadingOrder comment and the dedicated equivalence
     // test in compiler/test/skeleton.test.js), so this is a pure
     // generalization, not a behavior change.
+    //
+    // This was originally scoped to ONLY recognized freeform-repeating-group
+    // containers (`containerFlowSafety.flowSafe`) — but Figma's raw layer
+    // order not matching visual order is a property of ANY container with no
+    // declared Auto Layout, not something special to detected repeating
+    // groups (confirmed: a plain 2-child GROUP — e.g. a card row + an
+    // independently-centered heading block above it — resolves flow-column
+    // via evaluateSideBySideColumn same as a freeform group would, and needs
+    // the identical DOM-order correction; real Figma "Blogs" section, and
+    // cross-validated across 162 real containers in 5 independent files).
+    // Broadening this to ANY node that resolves to a real flow-row/
+    // flow-column/grid-track mode is safe specifically because every one of
+    // those modes is only ever reached after the geometry layer already
+    // rejected any pair of overlapping children (evaluateRowOrColumn/
+    // evaluateSideBySideRow/evaluateSideBySideColumn/evaluateColumnFlex all
+    // reject on real overlap) — so reordering a resolved flow container's
+    // DOM never changes paint order for anything that actually depends on
+    // it. Deliberately excludes 'grid-real' (explicit Figma Grid Auto
+    // Layout): each child already carries its own gridRowAnchorIndex/
+    // gridColumnAnchorIndex placement, so visual position there is already
+    // independent of DOM order.
     const containerFlowSafety = freeformGroupFact && freeformFlowSafetyByContainerId.get(node.id);
-    if (containerFlowSafety && containerFlowSafety.flowSafe) {
+    const needsReadingOrderCorrection = (containerFlowSafety && containerFlowSafety.flowSafe)
+      || mode === 'flow-row' || mode === 'flow-column' || mode === 'grid-track';
+    if (needsReadingOrderCorrection) {
       kids = kids.slice().sort((a, b) => {
         const oa = skeletonByNodeId.get(a.id);
         const ob = skeletonByNodeId.get(b.id);
@@ -1160,6 +1568,47 @@ async function renderIrExperimental(document, opts = {}) {
       });
     }
     const renderedKids = kids.map((k) => buildRenderNode(k, node.box, node.attributes));
+
+    // Which of THIS node's own children are safe to make fluid+wrap: a
+    // flowSafe ROW-axis group whose members may reflow onto extra lines,
+    // growing this container TALLER than Figma's own captured height — safe
+    // ONLY when no OTHER sibling is positioned below it (raw box.y greater
+    // than this one's), since that sibling's own fixed `top` offset assumes
+    // the ORIGINAL, unwrapped height. Real, confirmed bug (Figma file
+    // fYKUEGHAxVkJwn8CwvJCsp node 50:2, "Incentives"): its 2 stacked card
+    // rows both made fluid+wrap unconditionally — the first row (3 cards)
+    // grew taller once wrapped at a narrow viewport, and the second row
+    // (fixed `top:565px`, sized for the original unwrapped height) rendered
+    // directly on top of it, visually overlapping garbled text. Scoping to
+    // "nothing below it" is conservative (an earlier row in a multi-row
+    // stack stays non-fluid, still clips rather than reflows — a disclosed,
+    // real remaining gap) but never wrong: the bottommost such row has, by
+    // definition, no sibling whose position depends on its height.
+    kids.forEach((k, i) => {
+      const kid = renderedKids[i];
+      if (!kid || !kid.layoutChoice || !kid.layoutChoice.freeformGroupContainer
+        || !kid.layoutChoice.freeformGroupContainer.flowSafe
+        || kid.layoutChoice.freeformGroupContainer.axis !== 'row') return;
+      const myY = k.box && k.box.y;
+      if (!Number.isFinite(myY)) return;
+      const hasSiblingBelow = kids.some((other, j) => j !== i && other.box && Number.isFinite(other.box.y) && other.box.y > myY);
+      if (!hasSiblingBelow) kid.layoutChoice.fluidAbsoluteWidth = true;
+    });
+
+    // A flowSafe ROW group's own `fluidAbsoluteWidth` (set above) is a no-op
+    // unless its PARENT can also actually shrink — an absolutely-positioned
+    // child with `width:100%` still renders at its full captured width if
+    // its containing block (this node) keeps a hard, non-fluid `width` of
+    // its own (100% of a hard-pinned box is that same hard box). Real case
+    // (Figma file eOwzPCQP0f3sAxzI0T0b9d, "Group 357"): the card row's
+    // direct parent is a plain absolutely-positioned wrapper existing only
+    // to co-locate the row with its "Recommended for you" / "See all"
+    // header sibling — it carries no chrome or meaning of its own, so
+    // making it fluid too has no visual cost, and is required for the
+    // child's own fluid+wrap fix to have any real effect.
+    if (renderedKids.some((k) => k.layoutChoice && k.layoutChoice.fluidAbsoluteWidth)) {
+      layoutChoice.fluidAbsoluteWidth = true;
+    }
 
     // A flex/grid container's natural (in-flow) height can fall short of its
     // real content whenever ANY child is rendered position:absolute — an
@@ -1215,6 +1664,31 @@ async function renderIrExperimental(document, opts = {}) {
       box: node.box,
       fillCss: layoutChoice.fillCss,
       clips: layoutChoice.clips,
+      // Hoisted alongside fillCss/clips for the same reason: the ROOT node's
+      // own Auto Layout padding must reach the `canvas` object below (see
+      // that call site's comment) — a real, confirmed bug otherwise: a
+      // section root with its own paddingLeft/Right/Top/Bottom (e.g. a
+      // symmetric side-margin that makes the whole design read as centered)
+      // silently rendered edge-to-edge with zero inset, because nothing
+      // downstream of buildRenderNode ever read layoutChoice.padding for
+      // the outermost node specifically.
+      padding: layoutChoice.padding,
+      // The ROOT node's own Auto Layout gap (`itemSpacing`) BETWEEN its
+      // top-level children — a real, confirmed bug (Figma file
+      // oPJPuHvvZOPo4nkzVxr11M node 43:2, "section.section-light": a real
+      // itemSpacing:84 between its 2 children, verified via direct browser
+      // measurement to render as a hard 0px gap). Distinct from `padding`
+      // above: `renderSections()` (materialize-html.js) renders each of the
+      // root's children as its OWN top-level sibling `<section>` — never as
+      // flex items inside a shared container `modeDecls()` could put a CSS
+      // `gap` on — so this scalar must reach materialize-html.js directly to
+      // become `margin-top` between those sibling sections. Only meaningful
+      // when the root actually stacks its children vertically (mode
+      // 'flow-column', i.e. Figma layoutMode:VERTICAL) — renderSections()
+      // always stacks sections as a vertical block flow regardless of the
+      // root's own resolved mode, so a HORIZONTAL root's gap has no matching
+      // axis here and is deliberately left unset rather than misapplied.
+      gap: mode === 'flow-column' ? layoutChoice.gap : null,
       // Design Skeleton role (compiler/skeleton) — 'decorative-chrome' /
       // 'leaf-shape' vs. real content. Consumed by materialize-html.js to
       // give decorative images an empty alt (rather than their raw Figma
@@ -1241,7 +1715,10 @@ async function renderIrExperimental(document, opts = {}) {
   const renderTree = buildRenderNode(rootNode, null, null);
   const rendered = materializeHtml(renderTree, {
     title: opts.title || 'Compiled design',
-    canvas: { fillCss: renderTree.fillCss, box: renderTree.box, clips: renderTree.clips },
+    canvas: {
+      fillCss: renderTree.fillCss, box: renderTree.box, clips: renderTree.clips, padding: renderTree.padding,
+      sectionGap: renderTree.gap,
+    },
     responsiveIr: {
       breakpoints: detectedResponsive.breakpoints,
       adaptations: detectedResponsive.adaptations,
@@ -1263,4 +1740,6 @@ module.exports = {
   rekeyForNdgCollapse,
   indexRawNodesById,
   collapsedWrapperBoxBySurvivorId,
+  justifyContentFor,
+  alignItemsFor,
 };

@@ -1,0 +1,157 @@
+{
+  "$schema": "https://json-schema.org/draft-07/schema#",
+  "contractId": "DecisionRecord",
+  "suiteVersion": "1.0.0",
+  "title": "DecisionRecord",
+  "description": "RFC-002 §2.2 Decision Record. Interpretations only — not Facts.",
+  "type": "object",
+  "required": [
+    "contractId",
+    "suiteVersion",
+    "id",
+    "subject",
+    "question",
+    "candidates",
+    "evidence",
+    "scores",
+    "ranking",
+    "winner",
+    "policy",
+    "status",
+    "alternatives_kept",
+    "trace_refs"
+  ],
+  "properties": {
+    "contractId": { "const": "DecisionRecord" },
+    "suiteVersion": { "type": "string" },
+    "id": { "type": "string", "minLength": 1 },
+    "subject": {
+      "oneOf": [
+        { "type": "string", "minLength": 1 },
+        { "type": "array", "items": { "type": "string", "minLength": 1 }, "minItems": 1 },
+        {
+          "type": "object",
+          "required": ["nodes"],
+          "properties": {
+            "nodes": { "type": "array", "items": { "type": "string", "minLength": 1 }, "minItems": 1 },
+            "edges": { "type": "array", "items": { "type": "string" } }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "question": { "type": "string", "minLength": 1 },
+    "candidates": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["candidateId", "answer"],
+        "properties": {
+          "candidateId": { "type": "string", "minLength": 1 },
+          "answer": { "type": "object", "additionalProperties": true },
+          "priorityBand": { "type": "string" },
+          "patternRef": { "type": "string" },
+          "localScore": { "type": "number", "minimum": 0, "maximum": 1 }
+        },
+        "additionalProperties": false
+      }
+    },
+    "evidence": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["evidenceId", "kind"],
+        "properties": {
+          "evidenceId": { "type": "string", "minLength": 1 },
+          "kind": {
+            "type": "string",
+            "enum": ["feature", "rule_hit", "graph_match", "override", "prior", "other"]
+          },
+          "ref": { "type": "string" },
+          "detail": { "type": "object", "additionalProperties": true }
+        },
+        "additionalProperties": false
+      }
+    },
+    "scores": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["candidateId", "value"],
+        "properties": {
+          "candidateId": { "type": "string" },
+          "value": { "type": "number", "minimum": 0, "maximum": 1 },
+          "breakdown": { "type": "object", "additionalProperties": { "type": "number" } }
+        },
+        "additionalProperties": false
+      }
+    },
+    "ranking": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Ordered candidate ids, best first."
+    },
+    "winner": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["kind", "candidateId"],
+          "properties": {
+            "kind": { "const": "candidate" },
+            "candidateId": { "type": "string", "minLength": 1 }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["kind"],
+          "properties": {
+            "kind": { "const": "abstain" },
+            "reason": { "type": "string" }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "policy": {
+      "type": "object",
+      "required": ["profileId"],
+      "properties": {
+        "profileId": { "type": "string", "minLength": 1 },
+        "profileVersion": { "type": ["string", "null"] },
+        "thresholdsApplied": {
+          "type": "object",
+          "description": "Optional snapshot of slots used; authoritative values are Phase 5.",
+          "additionalProperties": true
+        }
+      },
+      "additionalProperties": false
+    },
+    "status": {
+      "type": "string",
+      "enum": ["proposed", "arbitrated", "overridden", "fallen-back", "rejected"]
+    },
+    "alternatives_kept": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Near-miss candidate ids retained for debug."
+    },
+    "trace_refs": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Links to explainability log entries."
+    },
+    "override": {
+      "type": "object",
+      "description": "Present when status is overridden.",
+      "properties": {
+        "actor": { "type": "string" },
+        "reason": { "type": "string" },
+        "forcedCandidateId": { "type": "string" },
+        "dangerous": { "type": "boolean" }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

@@ -1,0 +1,86 @@
+{
+  "$schema": "https://json-schema.org/draft-07/schema#",
+  "contractId": "Hypothesis",
+  "suiteVersion": "1.0.0",
+  "title": "Hypothesis",
+  "description": "Uncommitted proposal. Not a Decision.",
+  "type": "object",
+  "required": ["contractId", "suiteVersion", "hypothesisId", "question", "subject", "candidates"],
+  "properties": {
+    "contractId": { "const": "Hypothesis" },
+    "suiteVersion": { "type": "string" },
+    "hypothesisId": { "type": "string", "minLength": 1 },
+    "question": { "type": "string", "minLength": 1 },
+    "subject": {
+      "oneOf": [
+        { "type": "string", "minLength": 1 },
+        { "type": "array", "items": { "type": "string", "minLength": 1 }, "minItems": 1 },
+        {
+          "type": "object",
+          "required": ["nodes"],
+          "properties": {
+            "nodes": { "type": "array", "items": { "type": "string", "minLength": 1 }, "minItems": 1 },
+            "edges": { "type": "array", "items": { "type": "string" } }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "candidates": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["candidateId", "answer"],
+        "properties": {
+          "candidateId": { "type": "string", "minLength": 1 },
+          "answer": { "type": "object", "additionalProperties": true },
+          "priorityBand": { "type": "string" },
+          "patternRef": { "type": "string" },
+          "localScore": { "type": "number", "minimum": 0, "maximum": 1 }
+        },
+        "additionalProperties": false
+      }
+    },
+    "evidence": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["evidenceId", "kind"],
+        "properties": {
+          "evidenceId": { "type": "string", "minLength": 1 },
+          "kind": {
+            "type": "string",
+            "enum": ["feature", "rule_hit", "graph_match", "override", "prior", "other"]
+          },
+          "ref": { "type": "string" },
+          "detail": { "type": "object", "additionalProperties": true }
+        },
+        "additionalProperties": false
+      }
+    },
+    "producer": {
+      "type": "object",
+      "properties": {
+        "engineId": { "type": "string" },
+        "packId": { "type": "string" },
+        "ruleId": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+    "localScores": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["candidateId", "value"],
+        "properties": {
+          "candidateId": { "type": "string" },
+          "value": { "type": "number", "minimum": 0, "maximum": 1 },
+          "breakdown": { "type": "object", "additionalProperties": { "type": "number" } }
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "additionalProperties": false
+}

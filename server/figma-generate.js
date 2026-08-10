@@ -242,29 +242,160 @@ function nodeDecls(node, parent, ctx) {
 // the file is fetched with `geometry=paths`; we wrap those paths in an <svg> sized
 // to the node box, painting fills/strokes from the node's own paints. This removes
 // the entire /images?format=svg render storm (the endpoint that causes the lock).
-function reconstructSvg(node) {
-  const b = node.absoluteBoundingBox || {};
-  const w = round(b.width || 0), h = round(b.height || 0);
-  if (!w || !h) return null;
-  const fillG = node.fillGeometry || [], strokeG = node.strokeGeometry || [];
-  if (!fillG.length && !strokeG.length) return null;
+//
+// Icon frames (fi_*) often only carry a bbox rectangle on the frame itself; the
+// real paths live on VECTOR children. We compose those children when own geometry
+// is empty or bbox-only — otherwise we emit a white/currentColor square.
+const VECTOR_LEAF = new Set(['VECTOR', 'BOOLEAN_OPERATION', 'STAR', 'REGULAR_POLYGON', 'LINE', 'ELLIPSE']);
+
+function geometryArrays(node) {
+  const fillG = node.fillGeometry || node.fillsGeometry || [];
+  const strokeG = node.strokeGeometry || [];
+  return { fillG, strokeG };
+}
+
+function paintFromNode(node) {
   const fills = visibleFills(node);
   const solid = fills.find((f) => f.type === 'SOLID');
   const grad = fills.find((f) => f.type && f.type.startsWith('GRADIENT'));
   const fillColor = solid ? figmaColor(solid.color, solid.opacity)
-    : (grad && grad.gradientStops && grad.gradientStops[0] ? figmaColor(grad.gradientStops[0].color) : 'currentColor');
+    : (grad && grad.gradientStops && grad.gradientStops[0] ? figmaColor(grad.gradientStops[0].color) : null);
   const strokes = (node.strokes || []).filter((s) => s.visible !== false);
   const strokeColor = strokes[0] && strokes[0].type === 'SOLID' ? figmaColor(strokes[0].color, strokes[0].opacity) : null;
+  return { fillColor, strokeColor };
+}
+
+function nearlyEq(a, b, eps = 0.06) {
+  if (!Number.isFinite(a) || !Number.isFinite(b)) return false;
+  return Math.abs(a - b) <= Math.max(eps, Math.abs(b) * 0.01);
+}
+
+function isBBoxRectPath(path, w, h) {
+  if (!path || typeof path !== 'string') return false;
+  if (!(w > 0) || !(h > 0)) return false;
+  // Extract numbers — do NOT strip all whitespace (breaks decimals: '25.1141 0' -> '25.11410')
+  const nums = [];
+  const re = /-?\d*\.?\d+(?:e[-+]?\d+)?/gi;
+  let m;
+  while ((m = re.exec(path)) !== null) nums.push(parseFloat(m[0]));
+  // Classic bbox rect: M0 0 L w 0 L w h L 0 h [L 0 0] Z  → 8 or 10 numbers
+  if (nums.length >= 8) {
+    const [x0, y0, x1, y1, x2, y2, x3, y3] = nums;
+    if (nearlyEq(x0, 0) && nearlyEq(y0, 0)
+      && nearlyEq(x1, w) && nearlyEq(y1, 0)
+      && nearlyEq(x2, w) && nearlyEq(y2, h)
+      && nearlyEq(x3, 0) && nearlyEq(y3, h)) return true;
+  }
+  // H/V form: M0 0 H w V h H 0 → numbers 0,0,w,h,0
+  if (nums.length >= 5 && /H/i.test(path) && /V/i.test(path)) {
+    const [x0, y0, hw, vh] = nums;
+    if (nearlyEq(x0, 0) && nearlyEq(y0, 0) && nearlyEq(hw, w) && nearlyEq(vh, h)) return true;
+  }
+  return false;
+}
+
+function isOwnGeometryBBoxOnly(node) {
+  const { fillG, strokeG } = geometryArrays(node);
+  const b = node.absoluteBoundingBox || {};
+  return fillG.length === 1 && !strokeG.length && isBBoxRectPath(fillG[0].path, b.width || 0, b.height || 0);
+}
+
+function pathPartsForNode(node, ox, oy) {
+  const { fillG, strokeG } = geometryArrays(node);
+  const b = node.absoluteBoundingBox || {};
+  const parts = [];
+  const { fillColor, strokeColor } = paintFromNode(node);
+  const paint = fillColor || strokeColor || 'currentColor';
+  const tf = (ox || oy) ? (' transform="translate(' + round(ox) + ' ' + round(oy) + ')"') : '';
+  for (const g of fillG) {
+    // Never paint frame/vector bbox chrome as the icon glyph
+    if (isBBoxRectPath(g.path, b.width || 0, b.height || 0)) continue;
+    const rule = g.windingRule === 'EVENODD' ? ' fill-rule="evenodd"' : '';
+    parts.push('<path d="' + g.path + '" fill="' + paint + '"' + rule + tf + '/>');
+  }
+  for (const g of strokeG) {
+    parts.push('<path d="' + g.path + '" fill="' + (strokeColor || paint) + '"' + tf + '/>');
+  }
+  return parts;
+}
+
+/** Compose VECTOR children into one SVG when the frame itself is bbox-only/empty. */
+function reconstructFromChildren(root) {
+  const rb = root.absoluteBoundingBox || {};
+  const w = round(rb.width || 0), h = round(rb.height || 0);
+  if (!w || !h) return null;
+  const parts = [];
+  function walk(n) {
+    if (!n || n.visible === false) return;
+    if (n !== root && VECTOR_LEAF.has(n.type)) {
+      const nb = n.absoluteBoundingBox || {};
+      const ox = (nb.x || 0) - (rb.x || 0);
+      const oy = (nb.y || 0) - (rb.y || 0);
+      parts.push.apply(parts, pathPartsForNode(n, ox, oy));
+      return;
+    }
+    for (const c of n.children || []) walk(c);
+  }
+  walk(root);
+  if (!parts.length) return null;
+  return '<svg width="' + w + '" height="' + h + '" viewBox="0 0 ' + w + ' ' + h
+    + '" fill="none" xmlns="http://www.w3.org/2000/svg">' + parts.join('') + '</svg>';
+}
+
+function reconstructSvg(node) {
+  const b = node.absoluteBoundingBox || {};
+  const w = round(b.width || 0), h = round(b.height || 0);
+  if (!w || !h) return null;
+  const { fillG, strokeG } = geometryArrays(node);
+  const onlyBBox = isOwnGeometryBBoxOnly(node);
+  const empty = !fillG.length && !strokeG.length;
+
+  // Icon frames / groups: compose real child paths instead of the frame bbox.
+  if (empty || onlyBBox) {
+    const composed = reconstructFromChildren(node);
+    if (composed) return composed;
+    return null; // never emit bbox placeholder squares
+  }
+
+  const { fillColor, strokeColor } = paintFromNode(node);
+  const paint = fillColor || strokeColor || 'currentColor';
   const parts = [];
   for (const g of fillG) {
     const rule = g.windingRule === 'EVENODD' ? ' fill-rule="evenodd"' : '';
-    parts.push(`<path d="${g.path}" fill="${fillColor}"${rule}/>`);
+    parts.push('<path d="' + g.path + '" fill="' + paint + '"' + rule + '/>');
   }
   for (const g of strokeG) {
-    parts.push(`<path d="${g.path}" fill="${strokeColor || fillColor}"/>`);
+    parts.push('<path d="' + g.path + '" fill="' + (strokeColor || paint) + '"/>');
   }
   if (!parts.length) return null;
-  return `<svg width="${w}" height="${h}" viewBox="0 0 ${w} ${h}" fill="none" xmlns="http://www.w3.org/2000/svg">${parts.join('')}</svg>`;
+  return '<svg width="' + w + '" height="' + h + '" viewBox="0 0 ' + w + ' ' + h
+    + '" fill="none" xmlns="http://www.w3.org/2000/svg">' + parts.join('') + '</svg>';
+}
+
+/** True when this node (or its vector children) can yield a real icon SVG locally. */
+function canBuildSvgLocally(node) {
+  if (!node) return false;
+  const b = node.absoluteBoundingBox || {};
+  if (!(b.width > 0) || !(b.height > 0)) return false;
+  const { fillG, strokeG } = geometryArrays(node);
+  const onlyBBox = isOwnGeometryBBoxOnly(node);
+  if ((fillG.length || strokeG.length) && !onlyBBox) {
+    const pathLen = fillG.reduce((n, g) => n + String(g.path || '').length, 0)
+      + strokeG.reduce((n, g) => n + String(g.path || '').length, 0);
+    if (pathLen >= 24) return true;
+  }
+  let found = false;
+  function walk(n) {
+    if (!n || n.visible === false || found) return;
+    if (n !== node && VECTOR_LEAF.has(n.type)) {
+      const g = geometryArrays(n);
+      if ((g.fillG.length || g.strokeG.length) && !isOwnGeometryBBoxOnly(n)) found = true;
+      return;
+    }
+    for (const c of n.children || []) walk(c);
+  }
+  walk(node);
+  return found;
 }
 
 // Build { nodeId: svgMarkup } for a map of vector nodes — local, no REST.
@@ -277,4 +408,4 @@ function reconstructSvgMarkup(svgNodes) {
   return out;
 }
 
-module.exports = { nodeDecls, figmaColor, visibleFills, reconstructSvg, reconstructSvgMarkup };
+module.exports = { nodeDecls, figmaColor, visibleFills, reconstructSvg, reconstructSvgMarkup, isBBoxRectPath, canBuildSvgLocally, isOwnGeometryBBoxOnly };

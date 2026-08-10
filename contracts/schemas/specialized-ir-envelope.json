@@ -1,0 +1,39 @@
+{
+  "$schema": "https://json-schema.org/draft-07/schema#",
+  "contractId": "SpecializedIrEnvelope",
+  "suiteVersion": "1.0.0",
+  "title": "SpecializedIrEnvelope",
+  "description": "Minimal envelope for specialized IR stages. Domain field catalogs deferred.",
+  "type": "object",
+  "required": ["contractId", "suiteVersion", "stageId", "sliceId", "nodeIds"],
+  "properties": {
+    "contractId": { "const": "SpecializedIrEnvelope" },
+    "suiteVersion": { "type": "string" },
+    "stageId": {
+      "type": "string",
+      "enum": [
+        "layout-ir",
+        "component-ir",
+        "token-ir",
+        "asset-ir",
+        "behavior-ir",
+        "semantic-ir",
+        "responsive-ir",
+        "a11y-ir"
+      ]
+    },
+    "sliceId": { "type": "string", "minLength": 1 },
+    "nodeIds": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 },
+      "description": "NodeRefs covered by this slice."
+    },
+    "graphId": { "type": "string", "description": "Optional link to NormalizedDesignGraph." },
+    "payload": {
+      "type": "object",
+      "description": "Opaque domain payload; filled in later engine phases.",
+      "additionalProperties": true
+    }
+  },
+  "additionalProperties": false
+}

@@ -1,0 +1,53 @@
+{
+  "contractId": "KnowledgeBundle",
+  "bundleId": "compiler-ui-ontology-overlay",
+  "version": "1.0.0",
+  "suiteVersion": "1.0.0",
+  "createdAt": "2026-07-18T00:00:00.000Z",
+  "description": "Overlay layer for composition tests",
+  "layers": [],
+  "dependencies": [
+    {
+      "bundleId": "compiler-ui-ontology",
+      "versionRange": "^1.0.0",
+      "required": true
+    }
+  ],
+  "entries": [
+    {
+      "entryId": "pattern:block.generic",
+      "kind": "pattern",
+      "aliases": ["generic-block", "overlay-alias"],
+      "matcherRefs": [],
+      "requiredEvidence": [],
+      "optionalEvidence": [],
+      "conflictsWith": [],
+      "obligations": [],
+      "emitHintsByPolicy": {
+        "semantic-lean": { "tagHint": "section" }
+      },
+      "examples": []
+    },
+    {
+      "entryId": "pattern:region.band",
+      "kind": "pattern",
+      "aliases": [],
+      "matcherRefs": [],
+      "requiredEvidence": [],
+      "optionalEvidence": [],
+      "conflictsWith": [],
+      "obligations": [],
+      "emitHintsByPolicy": {},
+      "examples": []
+    }
+  ],
+  "relations": [
+    {
+      "from": "pattern:region.band",
+      "to": "pattern:block.generic",
+      "type": "specializes"
+    }
+  ],
+  "packs": ["pack.synthetic"],
+  "priors": []
+}

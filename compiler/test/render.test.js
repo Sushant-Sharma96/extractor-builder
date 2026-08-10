@@ -21,8 +21,14 @@ const {
   freeformPassthroughDecls,
   freeformGridPlacementDecls,
   freeformLeafChromeDecls,
+  freeformLeafTextWidthDecls,
+  canvasDecls,
   solidFillCss,
   paintCss,
+  boxShadowCss,
+  blurFiltersCss,
+  radialGradientCss,
+  strokeDecls,
   px,
   declString,
 } = require('../emit/render/css-declarations');
@@ -30,7 +36,9 @@ const { materializeHtml } = require('../emit/render/materialize-html');
 const { CSS_RESET_BLOCK } = require('../emit/render/utility-css');
 const { buildLayoutChoices } = require('../emit/project');
 const { applyLayoutBindings } = require('../artifacts/apply-plan');
-const { sanitizeGridTrackString, rekeyForNdgCollapse } = require('../artifacts/ir-experimental-renderer');
+const {
+  sanitizeGridTrackString, rekeyForNdgCollapse, justifyContentFor, alignItemsFor,
+} = require('../artifacts/ir-experimental-renderer');
 
 let passed = 0;
 let failed = 0;
@@ -173,6 +181,103 @@ test('paintCss — real Challenge Arena gradient fixture (handles (0,0.5)->(1,0.
   assert(result, 'gradient paint resolved to a value');
   assert.strictEqual(result.prop, 'background-image');
   assert.strictEqual(result.value, 'linear-gradient(90deg, #9c73f7 0%, #2964f5 100%)');
+});
+
+// ─── docs/COMPILER_REDESIGN_ROADMAP.md Phase 5.5 — visual/paint properties ──
+
+test('paintCss — GRADIENT_RADIAL approximates a CSS radial-gradient ellipse from Figma\'s 3-handle system', () => {
+  const paint = {
+    type: 'GRADIENT_RADIAL',
+    gradientHandlePositions: [{ x: 0.5, y: 0.5 }, { x: 1, y: 0.5 }, { x: 0.5, y: 1 }],
+    gradientStops: [
+      { color: { r: 1, g: 1, b: 1, a: 1 }, position: 0 },
+      { color: { r: 0, g: 0, b: 0, a: 1 }, position: 1 },
+    ],
+  };
+  const result = paintCss([paint], { width: 200, height: 100 });
+  assert(result, 'radial gradient resolved to a value');
+  assert.strictEqual(result.prop, 'background-image');
+  assert.strictEqual(result.value, 'radial-gradient(ellipse 100px 50px at 50% 50%, #ffffff 0%, #000000 100%)');
+});
+
+test('radialGradientCss — degenerate handles (zero radius) return null rather than an invalid gradient', () => {
+  assert.strictEqual(radialGradientCss([{ x: 0.5, y: 0.5 }, { x: 0.5, y: 0.5 }, { x: 0.5, y: 1 }], { width: 100, height: 100 }, '#fff 0%'), null);
+});
+
+test('paintCss — multiple stacked fills (solid + gradient) layer as comma-separated background-image entries, topmost Figma fill listed FIRST in CSS (Figma paints LATER array entries on top; CSS lists its topmost layer first)', () => {
+  const solid = { type: 'SOLID', color: { r: 1, g: 0, b: 0, a: 1 } };
+  const gradient = {
+    type: 'GRADIENT_LINEAR',
+    gradientHandlePositions: [{ x: 0, y: 0.5 }, { x: 1, y: 0.5 }, { x: 0, y: 1 }],
+    gradientStops: [
+      { color: { r: 0, g: 0, b: 1, a: 1 }, position: 0 },
+      { color: { r: 0, g: 1, b: 0, a: 1 }, position: 1 },
+    ],
+  };
+  // Figma array order [solid, gradient] means gradient (later) is on TOP.
+  const result = paintCss([solid, gradient], { width: 100, height: 100 });
+  assert(result, 'multi-fill resolved to a value');
+  assert.strictEqual(result.prop, 'background-image');
+  assert.strictEqual(result.value, 'linear-gradient(90deg, #0000ff 0%, #00ff00 100%), linear-gradient(#ff0000, #ff0000)', 'gradient (topmost Figma fill) listed FIRST, solid (bottom) listed SECOND');
+});
+
+test('paintCss — a multi-fill stack containing an IMAGE fill bails to null (images need real <img> handling, not a CSS background layer — a partial background would be more confusing than none)', () => {
+  const solid = { type: 'SOLID', color: { r: 1, g: 1, b: 1, a: 1 } };
+  const image = { type: 'IMAGE', imageRef: 'abc' };
+  assert.strictEqual(paintCss([solid, image], { width: 100, height: 100 }), null);
+});
+
+test('paintCss — single-fill SOLID/LINEAR cases remain byte-identical to before Phase 5.5 (no regression from the multi-fill rewrite)', () => {
+  assert.deepStrictEqual(paintCss([{ type: 'SOLID', color: { r: 1, g: 1, b: 1, a: 1 } }], { width: 10, height: 10 }), { prop: 'background-color', value: '#ffffff' });
+  assert.strictEqual(paintCss([], { width: 10, height: 10 }), null);
+  assert.strictEqual(paintCss([{ type: 'IMAGE' }], { width: 10, height: 10 }), null, 'a lone IMAGE fill still resolves to null (unchanged — handled elsewhere as a real <img>)');
+});
+
+test('modeDecls — rectangleCornerRadii with mixed values emits per-corner border-radius in Figma\'s own [TL,TR,BR,BL] order (byte-identical to CSS border-radius shorthand order, no reordering needed)', () => {
+  const decls = modeDecls({ mode: 'absolute', left: 0, top: 0, rectangleCornerRadii: [4, 8, 12, 16] });
+  const asMap = new Map(decls);
+  assert.strictEqual(asMap.get('border-radius'), '4px 8px 12px 16px');
+});
+
+test('modeDecls — rectangleCornerRadii all-zero (genuinely uniform, no real mixed radius) falls through to the plain cornerRadius branch instead', () => {
+  const decls = modeDecls({ mode: 'absolute', left: 0, top: 0, rectangleCornerRadii: [0, 0, 0, 0], cornerRadius: 10 });
+  const asMap = new Map(decls);
+  assert.strictEqual(asMap.get('border-radius'), '10px');
+});
+
+test('modeDecls — isEllipse still wins over rectangleCornerRadii (border-radius:50%, unconditionally, matching the existing cornerRadius precedence)', () => {
+  const decls = modeDecls({ mode: 'absolute', left: 0, top: 0, isEllipse: true, rectangleCornerRadii: [4, 8, 12, 16] });
+  const asMap = new Map(decls);
+  assert.strictEqual(asMap.get('border-radius'), '50%');
+});
+
+test('blurFiltersCss — LAYER_BLUR maps to filter:blur(), BACKGROUND_BLUR maps to backdrop-filter:blur(), independently (a node can carry both at once)', () => {
+  const result = blurFiltersCss([
+    { type: 'LAYER_BLUR', visible: true, radius: 8 },
+    { type: 'BACKGROUND_BLUR', visible: true, radius: 12 },
+  ]);
+  assert.strictEqual(result.filter, 'blur(8px)');
+  assert.strictEqual(result.backdropFilter, 'blur(12px)');
+});
+
+test('blurFiltersCss — no blur effects (or a hidden one) returns { filter: null, backdropFilter: null }', () => {
+  assert.deepStrictEqual(blurFiltersCss([]), { filter: null, backdropFilter: null });
+  assert.deepStrictEqual(blurFiltersCss([{ type: 'LAYER_BLUR', visible: false, radius: 8 }]), { filter: null, backdropFilter: null });
+});
+
+test('modeDecls — filterCss/backdropFilterCss emit filter/backdrop-filter (+ -webkit- prefix for the latter)', () => {
+  const decls = modeDecls({ mode: 'absolute', left: 0, top: 0, filterCss: 'blur(8px)', backdropFilterCss: 'blur(12px)' });
+  const asMap = new Map(decls);
+  assert.strictEqual(asMap.get('filter'), 'blur(8px)');
+  assert.strictEqual(asMap.get('backdrop-filter'), 'blur(12px)');
+  assert.strictEqual(asMap.get('-webkit-backdrop-filter'), 'blur(12px)');
+});
+
+test('modeDecls — no filterCss/backdropFilterCss emits neither declaration (no regression for nodes without blur effects)', () => {
+  const decls = modeDecls({ mode: 'absolute', left: 0, top: 0 });
+  const asMap = new Map(decls);
+  assert.strictEqual(asMap.has('filter'), false);
+  assert.strictEqual(asMap.has('backdrop-filter'), false);
 });
 
 test('modeDecls — a gradient fillPaint emits background-image, never background-color (they are not interchangeable CSS properties)', () => {
@@ -470,6 +575,29 @@ test('freeformGroupContainerDecls — columns with no x data (gap unknowable) ->
   assert.strictEqual(asMap.get('grid-template-columns'), '40px 0px 424px');
 });
 
+test('freeformGroupContainerDecls — flowSafe ROW axis WITH fluidWidth emits flex-wrap:wrap (real bug: Figma file eOwzPCQP0f3sAxzI0T0b9d, "Group 357" — the "Recommended for you" card row\'s fixed-width members never reflowed to fewer per line on a narrow viewport)', () => {
+  const decls = freeformGroupContainerDecls({ flowSafe: true, axis: 'row', gap: 50 }, true);
+  const asMap = new Map(decls);
+  assert.strictEqual(asMap.get('display'), 'flex');
+  assert.strictEqual(asMap.get('flex-direction'), 'row');
+  assert.strictEqual(asMap.get('flex-wrap'), 'wrap');
+});
+
+test('freeformGroupContainerDecls — flowSafe ROW axis WITHOUT fluidWidth never emits flex-wrap (real bug: Figma file fYKUEGHAxVkJwn8CwvJCsp node 50:2, "Incentives" — an earlier row in a stack of 2 has a sibling row below it depending on its original height, so its width stays hard-pinned and wrap could never actually trigger; emitting flex-wrap anyway would be dead, confusing CSS)', () => {
+  const decls = freeformGroupContainerDecls({ flowSafe: true, axis: 'row', gap: 28 }, false);
+  const asMap = new Map(decls);
+  assert.strictEqual(asMap.get('display'), 'flex');
+  assert.strictEqual(asMap.has('flex-wrap'), false);
+});
+
+test('freeformGroupContainerDecls — flowSafe COLUMN axis never emits flex-wrap even with fluidWidth (a column-axis group\'s members already stack one per line — nothing to wrap)', () => {
+  const decls = freeformGroupContainerDecls({ flowSafe: true, axis: 'column', gap: 20 }, true);
+  const asMap = new Map(decls);
+  assert.strictEqual(asMap.get('display'), 'flex');
+  assert.strictEqual(asMap.get('flex-direction'), 'column');
+  assert.strictEqual(asMap.has('flex-wrap'), false);
+});
+
 test('freeformGroupMemberDecls — member becomes its own grid with the SAME track string as the container (guarantees cross-member alignment), chrome bg lifted, real inset derived from column[0].x', () => {
   const decls = freeformGroupMemberDecls({
     axis: 'column',
@@ -485,18 +613,7 @@ test('freeformGroupMemberDecls — member becomes its own grid with the SAME tra
   assert.strictEqual(asMap.get('padding-top'), '0px');
 });
 
-test('freeformGroupMemberDecls — axis:"row" puts the along-axis inset on padding-top (perpendicular bucketing) and the cross-axis inset (crossInset — detect.js\'s crossPositionOf(), e.g. Incentives\' cards real 40px content inset) on padding-left', () => {
-  const decls = freeformGroupMemberDecls({
-    axis: 'row',
-    columns: [{ x: 8, width: 100 }],
-    crossInset: 40,
-  });
-  const asMap = new Map(decls);
-  assert.strictEqual(asMap.get('padding-top'), '8px');
-  assert.strictEqual(asMap.get('padding-left'), '40px');
-});
-
-test('freeformGroupMemberDecls — axis:"row" with no crossInset fact (older/absent data) falls back to padding-left:0, never NaN/undefined', () => {
+test('freeformGroupMemberDecls — axis:"row" puts the along-axis inset on padding-top (perpendicular bucketing); padding-left is always 0 now — cross-axis inset (detect.js\'s crossPositionOf(), e.g. Incentives\' cards real 40px content inset) moved to a PER-COLUMN value applied per-leaf by freeformGridPlacementDecls\' own margin instead, since a single member-wide value can\'t express a member that mixes a full-bleed column (e.g. a photo) with a genuinely inset one (e.g. a title row) — confirmed real bug: Figma file fYKUEGHAxVkJwn8CwvJCsp node 84:7, "Blogs" card 1', () => {
   const decls = freeformGroupMemberDecls({
     axis: 'row',
     columns: [{ x: 8, width: 100 }],
@@ -510,6 +627,67 @@ test('freeformGroupMemberDecls — no chromeBg -> no background-color declared',
   const decls = freeformGroupMemberDecls({ axis: 'row', columns: [{ width: 100 }] });
   const asMap = new Map(decls);
   assert.strictEqual(asMap.has('background-color'), false);
+});
+
+// docs/COMPILER_REDESIGN_ROADMAP.md Phase 8 (Style Resolver) — the
+// strokeAlign consolidation, extracted from modeDecls()'s own single-node
+// branch so rowSetRowDecls()/freeformGroupMemberDecls() can share it instead
+// of each independently (and previously wrongly) hardcoding `border`.
+test('strokeDecls — OUTSIDE emits outline + outline-offset:0px, never border (real bug: Incentives node fYKUEGHAxVkJwn8CwvJCsp:50:206, a real 1px 15%-white OUTSIDE stroke that used to get downgraded to border once lifted onto a repeating card)', () => {
+  const decls = strokeDecls('rgba(255,255,255,0.15)', 1, 'OUTSIDE', 'solid');
+  const asMap = new Map(decls);
+  assert.strictEqual(asMap.get('outline'), '1px solid rgba(255,255,255,0.15)');
+  assert.strictEqual(asMap.get('outline-offset'), '0px');
+  assert.strictEqual(asMap.has('border'), false);
+});
+
+test('strokeDecls — CENTER emits outline + outline-offset:-halfWidth, never border', () => {
+  const decls = strokeDecls('#000000', 4, 'CENTER', 'solid');
+  const asMap = new Map(decls);
+  assert.strictEqual(asMap.get('outline'), '4px solid #000000');
+  assert.strictEqual(asMap.get('outline-offset'), '-2px');
+  assert.strictEqual(asMap.has('border'), false);
+});
+
+test('strokeDecls — INSIDE (or absent strokeAlign) emits plain border, never outline (unchanged default)', () => {
+  const decls = strokeDecls('#000000', 2, 'INSIDE', 'solid');
+  const asMap = new Map(decls);
+  assert.strictEqual(asMap.get('border'), '2px solid #000000');
+  assert.strictEqual(asMap.has('outline'), false);
+});
+
+test('strokeDecls — no strokeCss, or zero/invalid strokeWeight, emits nothing at all', () => {
+  assert.deepStrictEqual(strokeDecls(null, 1, 'OUTSIDE', 'solid'), []);
+  assert.deepStrictEqual(strokeDecls('#000', 0, 'OUTSIDE', 'solid'), []);
+  assert.deepStrictEqual(strokeDecls('#000', NaN, 'OUTSIDE', 'solid'), []);
+});
+
+test('rowSetRowDecls — chromeStrokeAlign:OUTSIDE lifts as outline, not the old hardcoded border (regression guard for the fix above)', () => {
+  const decls = rowSetRowDecls({
+    hasChrome: true,
+    columns: [{ width: 100 }],
+    chromeStrokeCss: 'rgba(255,255,255,0.15)',
+    chromeStrokeWeight: 1,
+    chromeStrokeAlign: 'OUTSIDE',
+  });
+  const asMap = new Map(decls);
+  assert.strictEqual(asMap.get('outline'), '1px solid rgba(255,255,255,0.15)');
+  assert.strictEqual(asMap.get('outline-offset'), '0px');
+  assert.strictEqual(asMap.has('border'), false);
+});
+
+test('freeformGroupMemberDecls — chromeStrokeAlign:OUTSIDE lifts as outline, not the old hardcoded border (regression guard for the fix above)', () => {
+  const decls = freeformGroupMemberDecls({
+    axis: 'column',
+    columns: [{ x: 0, width: 100 }],
+    chromeStrokeCss: 'rgba(255,255,255,0.15)',
+    chromeStrokeWeight: 1,
+    chromeStrokeAlign: 'OUTSIDE',
+  });
+  const asMap = new Map(decls);
+  assert.strictEqual(asMap.get('outline'), '1px solid rgba(255,255,255,0.15)');
+  assert.strictEqual(asMap.get('outline-offset'), '0px');
+  assert.strictEqual(asMap.has('border'), false);
 });
 
 test('freeformChromeHiddenDecls / freeformPassthroughDecls — pure fixed decls (same idiom as the row-set precedent)', () => {
@@ -526,6 +704,18 @@ test('freeformGridPlacementDecls — axis:"column" -> grid-column (1-based line,
 test('freeformGridPlacementDecls — no placement (null column) -> no decls, graceful degrade', () => {
   assert.deepStrictEqual(freeformGridPlacementDecls(null), []);
   assert.deepStrictEqual(freeformGridPlacementDecls({ axis: 'row', order: NaN }), []);
+});
+
+test('freeformGridPlacementDecls — a leaf\'s own PER-COLUMN crossInset (e.g. Incentives\' cards real 40px content inset) emits margin-left for axis:"row" / margin-top for axis:"column", alongside the grid-row/grid-column placement — this is the per-leaf mechanism that replaced the old member-wide padding (see freeformGroupMemberDecls\' own comment)', () => {
+  const row = freeformGridPlacementDecls({ axis: 'row', order: 1, crossInset: 40 });
+  assert.deepStrictEqual(row, [['grid-row', '3'], ['margin-left', '40px']]);
+  const col = freeformGridPlacementDecls({ axis: 'column', order: 0, crossInset: 12 });
+  assert.deepStrictEqual(col, [['grid-column', '1'], ['margin-top', '12px']]);
+});
+
+test('freeformGridPlacementDecls — no crossInset (or exactly 0 — a genuinely full-bleed column, e.g. the "Blogs" card photo) emits no margin at all, never margin:0px', () => {
+  assert.deepStrictEqual(freeformGridPlacementDecls({ axis: 'row', order: 0 }), [['grid-row', '1']]);
+  assert.deepStrictEqual(freeformGridPlacementDecls({ axis: 'row', order: 0, crossInset: 0 }), [['grid-row', '1']]);
 });
 
 test('buildDecls — freeformGroupContainer overrides the generic mode decl for the same property (display)', () => {
@@ -546,6 +736,21 @@ test('buildDecls — freeformGroupMember + freeformGridPlacement compose (a memb
   const asMap = new Map(decls);
   assert.strictEqual(asMap.get('display'), 'grid');
   assert.strictEqual(asMap.get('background-color'), '#abc123');
+});
+
+test('buildDecls — a node that is BOTH a flowSafe freeformGroupContainer (of its own real children) AND a freeformGroupMember (of its own parent) resolves display/flex-direction/align-items/gap to the CONTAINER\'s values, not the member\'s (real, confirmed bug: Figma file eOwzPCQP0f3sAxzI0T0b9d, "Group 357" — a card is simultaneously the container of its own 2-item "Design"/"3 Month" badge row and a member of the outer 4-card row; the member\'s generic display:grid was silently winning over the container\'s display:flex, so the badges — which depend on their parent actually being flex-row — fell back to plain block stacking instead of sitting side by side)', () => {
+  const decls = buildDecls({
+    mode: 'unknown',
+    freeformGroupMember: { axis: 'row', columns: [{ width: 28 }], chromeBg: null },
+    freeformGroupContainer: { flowSafe: true, axis: 'row', gap: 139 },
+  });
+  const asMap = new Map(decls);
+  assert.strictEqual(asMap.get('display'), 'flex');
+  assert.strictEqual(asMap.get('flex-direction'), 'row');
+  assert.strictEqual(asMap.get('align-items'), 'flex-start');
+  assert.strictEqual(asMap.get('gap'), '139px');
+  // Never the member's grid-based fallback for the same property.
+  assert.notStrictEqual(asMap.get('display'), 'grid');
 });
 
 test('buildDecls — freeformChromeHidden overrides display to none (chrome node inside a freeform member)', () => {
@@ -593,6 +798,64 @@ test('buildDecls — freeformLeafCornerRadius absent (no NDG corner-radius data 
   const decls = buildDecls({ mode: 'unknown', freeformGridPlacement: { axis: 'column', order: 4 } });
   const asMap = new Map(decls);
   assert.strictEqual(asMap.has('border-radius'), false);
+});
+
+test('freeformLeafTextWidthDecls — a real, finite width (e.g. a card description paragraph leaf) emits max-width verbatim, never invented', () => {
+  // Real Figma file fYKUEGHAxVkJwn8CwvJCsp node 50:2 ("Incentives") values:
+  // a description paragraph's box (280px) and the "Build Real- World AI
+  // Applications" heading's WIDTH_AND_HEIGHT auto-fit box (244px).
+  assert.deepStrictEqual(freeformLeafTextWidthDecls(280), [['max-width', '280px']]);
+  assert.deepStrictEqual(freeformLeafTextWidthDecls(244), [['max-width', '244px']]);
+});
+
+test('freeformLeafTextWidthDecls — no width data (null/undefined/NaN) -> no decls, safe degrade (never a hardcoded default)', () => {
+  assert.deepStrictEqual(freeformLeafTextWidthDecls(null), []);
+  assert.deepStrictEqual(freeformLeafTextWidthDecls(undefined), []);
+  assert.deepStrictEqual(freeformLeafTextWidthDecls(NaN), []);
+});
+
+test('buildDecls — freeformLeafTextMaxWidth adds max-width without touching other decls (e.g. a freeform-grid text leaf, real bug: Incentives card description paragraphs/heading wrapping one word later than Figma with no width at all)', () => {
+  const decls = buildDecls({
+    mode: 'unknown', freeformGridPlacement: { axis: 'row', order: 2 }, freeformLeafTextMaxWidth: 280,
+  });
+  const asMap = new Map(decls);
+  assert.strictEqual(asMap.get('grid-row'), '5');
+  assert.strictEqual(asMap.get('max-width'), '280px');
+});
+
+test('buildDecls — freeformLeafTextMaxWidth absent (non-text or no captured box width) -> no max-width emitted, no invented default', () => {
+  const decls = buildDecls({ mode: 'unknown', freeformGridPlacement: { axis: 'row', order: 2 } });
+  const asMap = new Map(decls);
+  assert.strictEqual(asMap.has('max-width'), false);
+});
+
+test('buildDecls — freeformLeafCornerRadius and freeformLeafTextMaxWidth compose independently (both can apply to the same node without clobbering each other)', () => {
+  const decls = buildDecls({
+    mode: 'unknown',
+    freeformGridPlacement: { axis: 'column', order: 4 },
+    freeformLeafCornerRadius: 19,
+    freeformLeafTextMaxWidth: 244,
+  });
+  const asMap = new Map(decls);
+  assert.strictEqual(asMap.get('border-radius'), '19px');
+  assert.strictEqual(asMap.get('max-width'), '244px');
+});
+
+test('buildDecls — an absolutely-positioned node with fluidAbsoluteWidth emits width:100%+max-width instead of a hard width (real bug: a flowSafe ROW group\'s own width was hard-pinned, so flex-wrap never had room to activate on a narrow viewport)', () => {
+  const decls = buildDecls({
+    mode: 'unknown', left: 0, top: 95, width: 1646, height: 617, fluidAbsoluteWidth: true,
+  });
+  const asMap = new Map(decls);
+  assert.strictEqual(asMap.get('position'), 'absolute');
+  assert.strictEqual(asMap.get('width'), '100%');
+  assert.strictEqual(asMap.get('max-width'), '1646px');
+});
+
+test('buildDecls — an absolutely-positioned node WITHOUT fluidAbsoluteWidth keeps the original hard width (backward-compatibility guarantee: every other absolutely-positioned node in the corpus is untouched by this change)', () => {
+  const decls = buildDecls({ mode: 'unknown', left: 139, top: 97, width: 1646, height: 712 });
+  const asMap = new Map(decls);
+  assert.strictEqual(asMap.get('width'), '1646px');
+  assert.strictEqual(asMap.has('max-width'), false);
 });
 
 test('buildDecls — a node with NO freeform-layout-ir fields present is completely unaffected (fallback guarantee): identical output to before this wiring existed', () => {
@@ -899,6 +1162,36 @@ test('materializeHtml — per-character text-run overrides emit an inline <span>
   );
 });
 
+test('materializeHtml — a per-character text-run override with STRIKETHROUGH/textCase now renders correctly (docs/STYLE_RESOLVER_ARCHITECTURE.md Section 5.2 — previously silently dropped by the old, separate runStyleCss() implementation; proven here through the real materializeHtml() pipeline, not just the isolated resolveTypography() unit)', () => {
+  const renderTree = {
+    nodeId: 'root',
+    type: 'FRAME',
+    name: 'Root',
+    box: { width: 100, height: 50 },
+    layoutChoice: { mode: 'flow-column' },
+    children: [
+      {
+        nodeId: 't',
+        type: 'TEXT',
+        name: 'Deal',
+        fontSize: 20,
+        characters: 'Was $50 now $30',
+        characterStyleOverrides: [0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1],
+        styleOverrideTable: {
+          1: { textDecoration: 'STRIKETHROUGH', textCase: 'UPPER' },
+        },
+        layoutChoice: { mode: 'unknown' },
+        children: [],
+      },
+    ],
+  };
+  const { html } = materializeHtml(renderTree);
+  assert.ok(
+    html.includes('<span style="text-transform:uppercase;text-decoration:line-through">now $30</span>'),
+    `run-styled span carries both STRIKETHROUGH and textCase — got: ${html}`
+  );
+});
+
 test('materializeHtml — TEXT node with no overrides emits no <span> (safe-degrade)', () => {
   const renderTree = {
     nodeId: 'root',
@@ -1069,6 +1362,35 @@ test('materializeHtml — omitting opts.fonts (or an empty list) emits no Google
   assert.ok(!html.includes('fonts.googleapis.com'));
 });
 
+test('materializeHtml — an icon-font family (e.g. "Font Awesome 5 Free") gets its own real CDN <link> instead of a broken Google Fonts request (real bug: Figma file eOwzPCQP0f3sAxzI0T0b9d, "Group 357" — a "3 Month" clock icon pasted as a Font Awesome text glyph, U+F017, rendered as a tofu box because the icon font itself never actually loaded)', () => {
+  const renderTree = {
+    nodeId: 'root', type: 'FRAME', name: 'Root', layoutChoice: { mode: 'flow-column' }, children: [],
+  };
+  const { html } = materializeHtml(renderTree, { fonts: ['Font Awesome 5 Free'] });
+  assert.ok(html.includes('https://cdnjs.cloudflare.com/ajax/libs/font-awesome/5.15.4/css/all.min.css'));
+  // Never sent to Google Fonts — that family doesn't exist there, the request would silently fail.
+  assert.ok(!html.includes('fonts.googleapis.com'));
+});
+
+test('materializeHtml — a mix of a real Google Font and an icon font gets BOTH links, each routed correctly', () => {
+  const renderTree = {
+    nodeId: 'root', type: 'FRAME', name: 'Root', layoutChoice: { mode: 'flow-column' }, children: [],
+  };
+  const { html } = materializeHtml(renderTree, { fonts: ['Poppins', 'Font Awesome 5 Free'] });
+  assert.ok(html.includes('https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700&display=swap'));
+  assert.ok(html.includes('https://cdnjs.cloudflare.com/ajax/libs/font-awesome/5.15.4/css/all.min.css'));
+  // The icon font itself must never leak into the Google Fonts family query.
+  assert.ok(!html.includes('family=Font'));
+});
+
+test('materializeHtml — icon-font family name matching is case/whitespace-insensitive (Figma-supplied font names are not guaranteed to match a hardcoded casing exactly)', () => {
+  const renderTree = {
+    nodeId: 'root', type: 'FRAME', name: 'Root', layoutChoice: { mode: 'flow-column' }, children: [],
+  };
+  const { html } = materializeHtml(renderTree, { fonts: ['  font awesome 5 free  '] });
+  assert.ok(html.includes('https://cdnjs.cloudflare.com/ajax/libs/font-awesome/5.15.4/css/all.min.css'));
+});
+
 // ─── Phase A: clipsContent / blendMode / strokeDashes / textDecoration ─────
 
 test('modeDecls — layoutChoice.clips emits overflow:hidden per-node (previously only ever applied at the page root)', () => {
@@ -1158,6 +1480,105 @@ test('modeDecls — TEXT node with no textDecoration emits no text-decoration de
   const decls = modeDecls({ mode: 'absolute', left: 0, top: 0, isText: true });
   const asMap = new Map(decls);
   assert.strictEqual(asMap.has('text-decoration'), false);
+});
+
+// ─── Gradient TEXT fill (background-clip:text) ─────────────────────────────
+
+test('modeDecls — a TEXT node whose fill is a gradient (fillPaint.prop === "background-image", no solid fillCss) uses the background-clip:text technique instead of a plain color (real bug: Figma file fYKUEGHAxVkJwn8CwvJCsp node 86:124, "Category" — a 3-stop linear gradient rendered as invisible white-on-white text, since solidFillCss() only ever recognizes SOLID paints)', () => {
+  const decls = modeDecls({
+    mode: 'absolute', left: 0, top: 0, isText: true, fillCss: null,
+    fillPaint: { prop: 'background-image', value: 'linear-gradient(90deg, #606ed1 0%, #e35252 100%)' },
+  });
+  const asMap = new Map(decls);
+  assert.strictEqual(asMap.get('background-image'), 'linear-gradient(90deg, #606ed1 0%, #e35252 100%)');
+  assert.strictEqual(asMap.get('background-clip'), 'text');
+  assert.strictEqual(asMap.get('-webkit-background-clip'), 'text');
+  assert.strictEqual(asMap.get('color'), 'transparent');
+  assert.strictEqual(asMap.get('-webkit-text-fill-color'), 'transparent');
+});
+
+test('modeDecls — a TEXT node with a real solid fillCss still just gets a plain color (no regression — the gradient-text branch only fires when fillCss is absent)', () => {
+  const decls = modeDecls({ mode: 'absolute', left: 0, top: 0, isText: true, fillCss: '#111111' });
+  const asMap = new Map(decls);
+  assert.strictEqual(asMap.get('color'), '#111111');
+  assert.strictEqual(asMap.has('background-image'), false);
+  assert.strictEqual(asMap.has('background-clip'), false);
+});
+
+// ─── Image-fill scale mode -> object-fit ───────────────────────────────────
+
+test('modeDecls — imageScaleMode "FILL" (Figma\'s default image-fill scale mode) emits object-fit:cover, not CSS\'s own "fill" keyword — the two vocabularies use "fill" for opposite behaviors (real bug: Figma file fYKUEGHAxVkJwn8CwvJCsp node 86:779, a 320x80 source image forced into a 90x70 box with no aspect-ratio preservation, since nothing ever set object-fit before)', () => {
+  const decls = modeDecls({ mode: 'absolute', left: 0, top: 0, imageScaleMode: 'FILL' });
+  const asMap = new Map(decls);
+  assert.strictEqual(asMap.get('object-fit'), 'cover');
+});
+
+test('modeDecls — imageScaleMode "FIT" emits object-fit:contain', () => {
+  const decls = modeDecls({ mode: 'absolute', left: 0, top: 0, imageScaleMode: 'FIT' });
+  const asMap = new Map(decls);
+  assert.strictEqual(asMap.get('object-fit'), 'contain');
+});
+
+test('modeDecls — no imageScaleMode (not an image fill) emits no object-fit at all', () => {
+  const decls = modeDecls({ mode: 'absolute', left: 0, top: 0 });
+  const asMap = new Map(decls);
+  assert.strictEqual(asMap.has('object-fit'), false);
+});
+
+// ─── Figma effects[] -> box-shadow ──────────────────────────────────────────
+
+test('boxShadowCss — a single visible DROP_SHADOW maps to a plain (non-inset) box-shadow value', () => {
+  const css = boxShadowCss([
+    { type: 'DROP_SHADOW', visible: true, color: { r: 0, g: 0, b: 0, a: 0.05 }, offset: { x: 0, y: 0 }, radius: 10 },
+  ]);
+  assert.strictEqual(css, '0px 0px 10px 0px rgba(0, 0, 0, 0.05)');
+});
+
+test('boxShadowCss — an INNER_SHADOW effect appends the CSS "inset" keyword', () => {
+  const css = boxShadowCss([
+    { type: 'INNER_SHADOW', visible: true, color: { r: 0, g: 0, b: 0, a: 0.25 }, offset: { x: 2, y: 4 }, radius: 6, spread: 1 },
+  ]);
+  assert.strictEqual(css, '2px 4px 6px 1px rgba(0, 0, 0, 0.25) inset');
+});
+
+test('boxShadowCss — multiple effects combine into one comma-separated value, in source order', () => {
+  const css = boxShadowCss([
+    { type: 'DROP_SHADOW', visible: true, color: { r: 0, g: 0, b: 0, a: 0.1 }, offset: { x: 0, y: 4 }, radius: 8 },
+    { type: 'DROP_SHADOW', visible: true, color: { r: 0, g: 0, b: 0, a: 0.2 }, offset: { x: 0, y: 1 }, radius: 2 },
+  ]);
+  assert.strictEqual(css, '0px 4px 8px 0px rgba(0, 0, 0, 0.1), 0px 1px 2px 0px rgba(0, 0, 0, 0.2)');
+});
+
+test('boxShadowCss — a hidden (visible:false) effect is excluded', () => {
+  const css = boxShadowCss([
+    { type: 'DROP_SHADOW', visible: false, color: { r: 0, g: 0, b: 0, a: 0.1 }, offset: { x: 0, y: 4 }, radius: 8 },
+  ]);
+  assert.strictEqual(css, null);
+});
+
+test('boxShadowCss — a BACKGROUND_BLUR/LAYER_BLUR effect is excluded (needs filter/backdrop-filter, an architecturally different mechanism, not box-shadow)', () => {
+  const css = boxShadowCss([
+    { type: 'LAYER_BLUR', visible: true, radius: 10 },
+    { type: 'BACKGROUND_BLUR', visible: true, radius: 10 },
+  ]);
+  assert.strictEqual(css, null);
+});
+
+test('boxShadowCss — no effects (undefined/empty array) returns null', () => {
+  assert.strictEqual(boxShadowCss(undefined), null);
+  assert.strictEqual(boxShadowCss([]), null);
+});
+
+test('modeDecls — layoutChoice.boxShadowCss is emitted verbatim as the CSS box-shadow declaration', () => {
+  const decls = modeDecls({ mode: 'absolute', left: 0, top: 0, boxShadowCss: '0px 0px 10px 0px rgba(0, 0, 0, 0.05)' });
+  const asMap = new Map(decls);
+  assert.strictEqual(asMap.get('box-shadow'), '0px 0px 10px 0px rgba(0, 0, 0, 0.05)');
+});
+
+test('modeDecls — no boxShadowCss emits no box-shadow declaration', () => {
+  const decls = modeDecls({ mode: 'absolute', left: 0, top: 0 });
+  const asMap = new Map(decls);
+  assert.strictEqual(asMap.has('box-shadow'), false);
 });
 
 // ─── Design Skeleton role -> accessibility attributes ──────────────────────
@@ -1272,6 +1693,55 @@ test('sanitizeGridTrackString — rejects anything outside a safe grid-track cha
   assert.strictEqual(sanitizeGridTrackString(42), null);
 });
 
+// ─── docs/COMPILER_REDESIGN_ROADMAP.md Phase 4 — alignment resolution ──────
+
+test('justifyContentFor — maps Figma\'s primaryAxisAlignItems enum to real CSS justify-content keywords', () => {
+  assert.strictEqual(justifyContentFor('MIN'), 'flex-start');
+  assert.strictEqual(justifyContentFor('CENTER'), 'center');
+  assert.strictEqual(justifyContentFor('MAX'), 'flex-end');
+  assert.strictEqual(justifyContentFor('SPACE_BETWEEN'), 'space-between');
+  assert.strictEqual(justifyContentFor(null), null, 'absent value maps to null, not a guessed default');
+  assert.strictEqual(justifyContentFor('SOMETHING_UNRECOGNIZED'), null);
+});
+
+test('alignItemsFor — maps Figma\'s counterAxisAlignItems enum to real CSS align-items keywords (real bug: Figma file c0kt3mp76RoEiq3CFoeCHa node 1:443, counterAxisAlignItems:"MAX", previously always rendered as the hardcoded align-items:center)', () => {
+  assert.strictEqual(alignItemsFor('MIN'), 'flex-start');
+  assert.strictEqual(alignItemsFor('CENTER'), 'center');
+  assert.strictEqual(alignItemsFor('MAX'), 'flex-end');
+  assert.strictEqual(alignItemsFor('BASELINE'), 'baseline');
+  assert.strictEqual(alignItemsFor(null), null);
+  assert.strictEqual(alignItemsFor(undefined), null);
+});
+
+test('modeDecls — mode:flow-row with a resolved alignItems/justifyContent emits Figma\'s real declared alignment instead of the hardcoded align-items:center default', () => {
+  const decls = modeDecls({ mode: 'flow-row', alignItems: 'flex-end', justifyContent: 'space-between' });
+  const asMap = new Map(decls);
+  assert.strictEqual(asMap.get('align-items'), 'flex-end');
+  assert.strictEqual(asMap.get('justify-content'), 'space-between');
+});
+
+test('modeDecls — mode:flow-row with NO resolved alignItems/justifyContent falls back to the exact pre-existing hardcoded defaults (align-items:center, no justify-content at all) — backward-compatibility guarantee for absent/legacy data', () => {
+  const decls = modeDecls({ mode: 'flow-row' });
+  const asMap = new Map(decls);
+  assert.strictEqual(asMap.get('align-items'), 'center');
+  assert.strictEqual(asMap.has('justify-content'), false, 'never emit justify-content when nothing was resolved — no guessed default for a property that has never been emitted before this fix');
+});
+
+test('modeDecls — mode:flow-column with a resolved alignItems emits it instead of the hardcoded align-items:flex-start default; no resolved value falls back unchanged', () => {
+  const withAlign = new Map(modeDecls({ mode: 'flow-column', alignItems: 'center' }));
+  assert.strictEqual(withAlign.get('align-items'), 'center');
+  const withoutAlign = new Map(modeDecls({ mode: 'flow-column' }));
+  assert.strictEqual(withoutAlign.get('align-items'), 'flex-start');
+  assert.strictEqual(withoutAlign.has('justify-content'), false);
+});
+
+test('modeDecls — mode:grid-real/grid-track (or absent mode) never emits align-items/justify-content at all, even if alignItems/justifyContent happen to be set on the layoutChoice (only flow-row/flow-column consume them, matching ir-experimental-renderer.js\'s own gating)', () => {
+  const decls = modeDecls({ mode: 'grid-real', alignItems: 'center', justifyContent: 'center' });
+  const asMap = new Map(decls);
+  assert.strictEqual(asMap.has('align-items'), false);
+  assert.strictEqual(asMap.has('justify-content'), false);
+});
+
 test('modeDecls — mode:grid-real emits Figma\'s own track strings + independent row/column gaps (the real fixture that was previously falling through to unstyled block flow)', () => {
   const decls = modeDecls({
     mode: 'grid-real',
@@ -1342,6 +1812,73 @@ test('rekeyForNdgCollapse — an unrelated collapse event (different id) leaves 
   const svgMarkup = { x: 'markup-x' };
   const events = [{ type: 'collapsed', sourceNodeId: 'y', replacedBy: 'z' }];
   assert.deepStrictEqual(rekeyForNdgCollapse(svgMarkup, events), { x: 'markup-x' });
+});
+
+// ─── canvasDecls — root node's own Auto Layout padding (confirmed real bug: ───
+// a section root with its own paddingLeft/Right/Top/Bottom — e.g. an 80px
+// symmetric side-margin that makes the whole design read as centered —
+// rendered edge-to-edge with zero inset, because canvasDecls() never read
+// canvas.padding at all (it didn't exist as a field until this fix).
+
+test('canvasDecls — root padding emits all 4 padding-* declarations onto the page canvas', () => {
+  const decls = canvasDecls({
+    fillCss: '#ffffff',
+    box: { width: 1440, height: 849 },
+    padding: { top: 61, right: 80, bottom: 112, left: 80 },
+  });
+  const map = Object.fromEntries(decls);
+  assert.strictEqual(map['padding-top'], '61px');
+  assert.strictEqual(map['padding-right'], '80px');
+  assert.strictEqual(map['padding-bottom'], '112px');
+  assert.strictEqual(map['padding-left'], '80px');
+});
+
+test('canvasDecls — no padding field (or all-null padding) emits no padding-* declarations (no regression for roots with no Auto Layout padding of their own)', () => {
+  const withoutField = canvasDecls({ fillCss: '#ffffff', box: { width: 1440, height: 849 } });
+  assert(!withoutField.some(([prop]) => prop.startsWith('padding')));
+
+  const withNullPadding = canvasDecls({
+    fillCss: '#ffffff',
+    box: { width: 1440, height: 849 },
+    padding: { top: null, right: null, bottom: null, left: null },
+  });
+  assert(!withNullPadding.some(([prop]) => prop.startsWith('padding')));
+});
+
+test('canvasDecls — a partial padding object (only some sides set, e.g. Figma left individualStrokeWeights-style asymmetric padding) emits only the finite sides', () => {
+  const decls = canvasDecls({ box: { width: 1440, height: 849 }, padding: { top: 40, right: null, bottom: null, left: null } });
+  const map = Object.fromEntries(decls);
+  assert.strictEqual(map['padding-top'], '40px');
+  assert.strictEqual('padding-right' in map, false);
+  assert.strictEqual('padding-bottom' in map, false);
+  assert.strictEqual('padding-left' in map, false);
+});
+
+test('canvasDecls — always emits overflow-x:hidden (real bug: a page-level horizontal scrollbar appeared on nearly every real desktop viewport once .et-page held a hard fixed design-width — clipping is the safer default for content with no reflow of its own)', () => {
+  const withoutClips = canvasDecls({ box: { width: 1920, height: 1022 } });
+  assert.strictEqual(Object.fromEntries(withoutClips)['overflow-x'], 'hidden');
+
+  const withClips = canvasDecls({ box: { width: 1920, height: 1022 }, clips: true });
+  const map = Object.fromEntries(withClips);
+  assert.strictEqual(map['overflow-x'], 'hidden');
+  // clipsContent:true still independently emits the existing, unrelated
+  // both-axes `overflow:hidden` (resolveShape's own clip-content mapping) —
+  // the two coexist without conflict (different property keys).
+  assert.strictEqual(map.overflow, 'hidden');
+});
+
+test('canvasDecls — emits min-height from canvas.box.height (real, severe regression caught live: .et-page holds only absolutely-positioned children, which contribute nothing to a block\'s own auto height, so without this its box is genuinely 0px tall — harmless while overflow stayed visible, but the overflow-x:hidden fix above forces the OTHER axis to also compute as auto per the CSS overflow spec, turning .et-page into a real clip container that, at 0px tall, clipped its ENTIRE page to nothing)', () => {
+  const decls = canvasDecls({ box: { width: 1440, height: 1079 } });
+  const map = Object.fromEntries(decls);
+  assert.strictEqual(map['min-height'], '1079px');
+});
+
+test('canvasDecls — no box.height (or non-finite) emits no min-height at all (no invented default)', () => {
+  const withoutHeight = canvasDecls({ box: { width: 1440 } });
+  assert.strictEqual('min-height' in Object.fromEntries(withoutHeight), false);
+
+  const withNaNHeight = canvasDecls({ box: { width: 1440, height: NaN } });
+  assert.strictEqual('min-height' in Object.fromEntries(withNaNHeight), false);
 });
 
 process.exitCode = failed ? 1 : 0;

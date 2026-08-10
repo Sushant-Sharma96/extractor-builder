@@ -1,0 +1,161 @@
+{
+  "registryId": "ir-stage-registry",
+  "suiteVersion": "1.0.0",
+  "description": "Enumerable IR stages with predecessors. Phase 1 spine.",
+  "stages": [
+    {
+      "stageId": "raw-design-document",
+      "version": "1.0.0",
+      "kind": "input",
+      "holds": "raw",
+      "predecessors": [],
+      "contractId": "RawDesignDocument"
+    },
+    {
+      "stageId": "normalized-design-graph",
+      "version": "1.0.0",
+      "kind": "facts",
+      "holds": "facts",
+      "predecessors": ["raw-design-document"],
+      "contractId": "NormalizedDesignGraph"
+    },
+    {
+      "stageId": "geometry-ir",
+      "version": "1.0.0",
+      "kind": "specialized",
+      "holds": "hypotheses-or-facts",
+      "predecessors": ["normalized-design-graph"],
+      "contractId": "SpecializedIrEnvelope",
+      "envelopeStageId": "geometry-ir",
+      "note": "Phase 0 of docs/COMPILER_MIGRATION_BLUEPRINT.md — sibling-geometry recognition (row/column/grid axis from box alignment+gaps alone). Feeds layout-ir's recognitionHints extension point; not yet a formal layout-ir predecessor and not yet a resolved-ir input (diagnostic/dark until Phase 1)."
+    },
+    {
+      "stageId": "freeform-layout-ir",
+      "version": "1.0.0",
+      "kind": "specialized",
+      "holds": "hypotheses-or-facts",
+      "predecessors": ["normalized-design-graph", "component-ir", "geometry-ir"],
+      "contractId": "SpecializedIrEnvelope",
+      "envelopeStageId": "freeform-layout-ir",
+      "note": "Normalizes inconsistent Figma freeform hierarchies into one of two canonical facts per node — RepeatingGroupMembership (container/member, axis-agnostic uniform clustering + union-of-columns) or AnchoredPosition — downstream of Component IR's cardGridFacts/rowSetFacts and Geometry IR's candidates. Same carve-out as geometry-ir: contractId SpecializedIrEnvelope is reused, but 'freeform-layout-ir' is intentionally NOT added to contracts/schemas/specialized-ir-envelope.json's stageId enum (see that schema's note) because runtime acceptance is enforced by compiler/ir-stage-registry.js's isKnownIrStage() reading THIS registry file, not by JSON-Schema-validating every produced envelope against the enum (contracts/validation/harness.js only schema-validates the fixture manifest, never live envelopes) — geometry-ir already established this precedent and works today despite the same enum omission. Not wired into any renderer (compiler/emit/render/*, compiler/artifacts/ir-experimental-renderer.js) — detection-stage only, diagnostic/dark until a follow-up renderer-wiring task, matching how row-set shipped."
+    },
+    {
+      "stageId": "layout-ir",
+      "version": "1.0.0",
+      "kind": "specialized",
+      "holds": "hypotheses-or-facts",
+      "predecessors": ["normalized-design-graph"],
+      "contractId": "SpecializedIrEnvelope",
+      "envelopeStageId": "layout-ir"
+    },
+    {
+      "stageId": "component-ir",
+      "version": "1.0.0",
+      "kind": "specialized",
+      "holds": "hypotheses-or-facts",
+      "predecessors": ["normalized-design-graph"],
+      "contractId": "SpecializedIrEnvelope",
+      "envelopeStageId": "component-ir"
+    },
+    {
+      "stageId": "token-ir",
+      "version": "1.0.0",
+      "kind": "specialized",
+      "holds": "hypotheses-or-facts",
+      "predecessors": ["normalized-design-graph"],
+      "contractId": "SpecializedIrEnvelope",
+      "envelopeStageId": "token-ir"
+    },
+    {
+      "stageId": "asset-ir",
+      "version": "1.0.0",
+      "kind": "specialized",
+      "holds": "hypotheses-or-facts",
+      "predecessors": ["normalized-design-graph"],
+      "contractId": "SpecializedIrEnvelope",
+      "envelopeStageId": "asset-ir"
+    },
+    {
+      "stageId": "behavior-ir",
+      "version": "1.0.0",
+      "kind": "specialized",
+      "holds": "hypotheses-or-facts",
+      "predecessors": ["normalized-design-graph"],
+      "contractId": "SpecializedIrEnvelope",
+      "envelopeStageId": "behavior-ir"
+    },
+    {
+      "stageId": "semantic-ir",
+      "version": "1.0.0",
+      "kind": "specialized",
+      "holds": "hypotheses-or-facts",
+      "predecessors": ["normalized-design-graph", "layout-ir"],
+      "contractId": "SpecializedIrEnvelope",
+      "envelopeStageId": "semantic-ir"
+    },
+    {
+      "stageId": "responsive-ir",
+      "version": "1.0.0",
+      "kind": "specialized",
+      "holds": "hypotheses-or-facts",
+      "predecessors": ["normalized-design-graph", "layout-ir"],
+      "contractId": "SpecializedIrEnvelope",
+      "envelopeStageId": "responsive-ir"
+    },
+    {
+      "stageId": "a11y-ir",
+      "version": "1.0.0",
+      "kind": "specialized",
+      "holds": "hypotheses-or-facts",
+      "predecessors": ["semantic-ir", "layout-ir"],
+      "contractId": "SpecializedIrEnvelope",
+      "envelopeStageId": "a11y-ir"
+    },
+    {
+      "stageId": "resolved-ir",
+      "version": "1.0.0",
+      "kind": "resolved",
+      "holds": "commitments",
+      "predecessors": [
+        "layout-ir",
+        "component-ir",
+        "token-ir",
+        "asset-ir",
+        "behavior-ir",
+        "semantic-ir",
+        "responsive-ir",
+        "a11y-ir"
+      ],
+      "predecessorRule": "at-least-one-specialized-plus-ndg-context",
+      "contractId": "ResolvedIR"
+    },
+    {
+      "stageId": "emit-plan",
+      "version": "1.0.0",
+      "kind": "lowering",
+      "holds": "lowering-plan",
+      "predecessors": ["resolved-ir"],
+      "contractId": "EmitPlan"
+    },
+    {
+      "stageId": "artifact-set",
+      "version": "1.0.0",
+      "kind": "artifacts",
+      "holds": "artifacts",
+      "predecessors": ["emit-plan"],
+      "contractId": "ArtifactSet"
+    }
+  ],
+  "illegalPredecessorExamples": [
+    {
+      "stageId": "emit-plan",
+      "invalidPredecessor": "raw-design-document",
+      "reason": "EmitPlan may not skip ResolvedIR."
+    },
+    {
+      "stageId": "resolved-ir",
+      "invalidPredecessor": "emit-plan",
+      "reason": "ResolvedIR cannot depend on lowering."
+    }
+  ]
+}

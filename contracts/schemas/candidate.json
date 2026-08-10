@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft-07/schema#",
+  "contractId": "Candidate",
+  "suiteVersion": "1.0.0",
+  "title": "Candidate",
+  "type": "object",
+  "required": ["candidateId", "answer"],
+  "properties": {
+    "candidateId": { "type": "string", "minLength": 1 },
+    "answer": {
+      "description": "Typed answer payload; shape depends on question. Open object.",
+      "type": "object",
+      "additionalProperties": true
+    },
+    "priorityBand": {
+      "type": "string",
+      "description": "Optional P0–P6 band label; arbitration runtime is Phase 4."
+    },
+    "patternRef": {
+      "type": "string",
+      "description": "Optional open string reference to a Knowledge pattern id — not a closed ontology enum."
+    },
+    "localScore": { "type": "number", "minimum": 0, "maximum": 1 }
+  },
+  "additionalProperties": false
+}

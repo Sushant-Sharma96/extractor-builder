@@ -16,6 +16,12 @@ const {
   NdgErrorKind,
   workingNodeFromRaw,
 } = require('../ndg');
+const {
+  hasPaintSignal,
+  isWrapperType,
+  applyStructuralPolicies,
+  indexWorking,
+} = require('../ndg/parser-ast');
 const { createWorkspace } = require('../workspace');
 const { createKernel } = require('../kernel');
 const { buildFingerprint, fingerprintKey } = require('../kernel/fingerprint');
@@ -614,6 +620,27 @@ async function main() {
     assert(child.attributes.gridColumnAnchorIndex === 2, 'gridColumnAnchorIndex');
     assert(child.attributes.gridRowSpan === 1, 'gridRowSpan');
     assert(child.attributes.gridColumnSpan === 1, 'gridColumnSpan');
+  });
+
+  await test('docs/COMPILER_REDESIGN_ROADMAP.md Phase 2 — parser-ast.js is independently testable, no ingest/build pipeline needed: hasPaintSignal/isWrapperType/applyStructuralPolicies work directly against hand-built working-node objects', () => {
+    assert(isWrapperType('FRAME') && isWrapperType('GROUP') && !isWrapperType('TEXT'), 'isWrapperType classifies structural vs. leaf types');
+    assert(hasPaintSignal({ geometry: { opacity: 0.5 } }) === true, 'hasPaintSignal recognizes non-default opacity alone as real signal');
+    assert(hasPaintSignal({ geometry: {} }) === false, 'hasPaintSignal recognizes a genuinely signal-less node');
+
+    // A single-child passthrough wrapper (Pass 3) collapses; its sibling
+    // with real paint survives untouched — proves applyStructuralPolicies
+    // runs correctly against a synthetic graph with no ingest.js involved.
+    const nodes = [
+      { sourceNodeId: 'root', type: 'FRAME', visible: true, childSourceIds: ['wrapper', 'real'], geometry: {}, attributes: {} },
+      { sourceNodeId: 'wrapper', type: 'FRAME', visible: true, parentSourceId: 'root', childSourceIds: ['leaf'], geometry: {}, attributes: {} },
+      { sourceNodeId: 'leaf', type: 'TEXT', visible: true, parentSourceId: 'wrapper', childSourceIds: [], geometry: {}, attributes: { characters: 'hi' } },
+      { sourceNodeId: 'real', type: 'FRAME', visible: true, parentSourceId: 'root', childSourceIds: [], geometry: { cornerRadius: 8 }, attributes: {}, paints: [{ type: 'SOLID', color: { r: 1, g: 0, b: 0 } }] },
+    ];
+    const bySource = indexWorking(nodes);
+    applyStructuralPolicies(bySource);
+    assert(!bySource.has('wrapper'), 'paint-less single-child wrapper collapsed');
+    assert(bySource.has('leaf') && bySource.get('leaf').parentSourceId === 'root', 'leaf reparented directly to root');
+    assert(bySource.has('real') && bySource.get('real').parentSourceId === 'root', 'sibling with real paint/cornerRadius untouched');
   });
 
   console.log('\n---');

@@ -1,0 +1,136 @@
+{
+  "generatedAt": "2026-07-26T12:57:47.297Z",
+  "engine": "constraint-transcriber-v2-general",
+  "note": "Figma layout corpus only — Lovable CORPUS-VALIDATION.md is separate and frozen.",
+  "pass": true,
+  "rows": [
+    {
+      "name": "articles",
+      "ok": true,
+      "exitCode": 0,
+      "stderrTail": "",
+      "gate": {
+        "pass": true,
+        "fail": [],
+        "promoted": 15,
+        "measured": 16,
+        "cards": 5,
+        "etCardGrid": true,
+        "etPathB": false
+      },
+      "qa": {
+        "emitMode": "auto",
+        "etPathB": false,
+        "etCard": 5,
+        "etMeasured": 16,
+        "etMediaOverlay": 0,
+        "etCardGrid": true,
+        "cssAbs": 14,
+        "constraint": {
+          "engine": "constraint-transcriber-v2-general",
+          "grids": 0,
+          "banners": 0,
+          "cards": 3,
+          "containers": 12,
+          "overlays": 0,
+          "verified": 18,
+          "demoted": 0,
+          "reasons": [],
+          "contentWidth": 1196,
+          "promoted": 15
+        },
+        "qaReady": true
+      }
+    },
+    {
+      "name": "ibm",
+      "ok": true,
+      "exitCode": 0,
+      "stderrTail": "",
+      "gate": {
+        "pass": true,
+        "fail": [],
+        "etCard": 5,
+        "etBanner": true,
+        "etCardGrid": true,
+        "etPathB": false
+      },
+      "qa": {
+        "emitMode": "auto",
+        "etPathB": false,
+        "etCard": 5,
+        "etBanner": true,
+        "etCardGrid": true,
+        "standardsPromoted": false,
+        "qaReady": true,
+        "fallbacks": 0,
+        "cssAbs": 14,
+        "standards": {
+          "engine": "standards-promotion-v1",
+          "regions": [
+            {
+              "type": "sectionHeader",
+              "nodeId": "11:710",
+              "name": "Group 1171277976",
+              "confidence": 0.88
+            },
+            {
+              "type": "featureCardGrid",
+              "nodeId": "11:643",
+              "name": "Group 1171277934",
+              "confidence": 0.92
+            },
+            {
+              "type": "featureCard",
+              "nodeId": "11:644",
+              "name": "Frame 1171277929",
+              "confidence": 0.9
+            },
+            {
+              "type": "featureCard",
+              "nodeId": "11:658",
+              "name": "Frame 1171277936",
+              "confidence": 0.9
+            },
+            {
+              "type": "featureCard",
+              "nodeId": "11:670",
+              "name": "Frame 1171277937",
+              "confidence": 0.9
+            },
+            {
+              "type": "featureCard",
+              "nodeId": "11:681",
+              "name": "Frame 1171277938",
+              "confidence": 0.9
+            },
+            {
+              "type": "quoteBanner",
+              "nodeId": "11:695",
+              "name": "Group 1171277389",
+              "confidence": 0.9
+            }
+          ],
+          "hoverStamped": {
+            "cards": 4,
+            "banners": 1
+          },
+          "oracle": {
+            "pass": true,
+            "failures": [],
+            "pathBShells": 0,
+            "absoluteCount": 9,
+            "fidelityAbsCount": 47,
+            "layoutPromoted": true,
+            "hasCards": true,
+            "hasBanner": true,
+            "hasHeader": true
+          },
+          "promotedPct": 100,
+          "qaReady": true,
+          "pathBShells": 0
+        }
+      }
+    }
+  ]
+}

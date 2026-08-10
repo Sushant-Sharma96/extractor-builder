@@ -8,6 +8,7 @@
 const path = require('path');
 const { createKernel, KernelError, FailureKind } = require('./kernel');
 const { emitArtifacts } = require('./artifacts');
+const { detectGeometry } = require('./geometry');
 
 const DEFAULT_ENGINES = Object.freeze({
   layout: true,
@@ -74,9 +75,17 @@ async function compile(options = {}) {
   const timings = {};
   const graphId = options.graphId || `g:compile:${Date.now()}`;
 
+  // Kernel Integration (docs/COMPILER_REDESIGN_ROADMAP.md Phase 6 follow-on)
+  // — hoisted so the already-materialized NDG graph can be threaded through
+  // to emitArtifacts() below for the `renderer:'ir-experimental'` path,
+  // instead of that renderer re-materializing an equivalent graph itself
+  // (compiler/artifacts/ir-experimental-renderer.js's opts.precomputedNdg,
+  // added in Phase 6 increment 2). The legacy renderer path is unaffected —
+  // it never reads this variable.
+  let ndg = null;
   if (!options.skipNdg) {
     const t = Date.now();
-    const ndg = await job.materializeNormalizedDesignGraph({
+    ndg = await job.materializeNormalizedDesignGraph({
       document: options.document,
       graphId,
       rawDocumentId: options.rawDocumentId,
@@ -85,10 +94,32 @@ async function compile(options = {}) {
     steps.push({ stage: 'ndg', sliceId: ndg.sliceId, checksum: ndg.checksum });
   }
 
+  // Kernel Integration, slice 2 — hoisted so the real projected LayoutIR's
+  // `interpretations` (compiler/layout/materialize.js's materializeLayoutIR()
+  // exposes the exact same interpretGraph() output ir-experimental-renderer.js
+  // would otherwise self-compute) can be threaded through to emitArtifacts()
+  // below via opts.precomputedInterpretations (Phase 6 increment 4).
+  //
+  // Root-cause note (found while verifying this slice, NOT a new heuristic):
+  // materializeLayoutIR() defaults `recognitionHintsByNode` to `{}` whenever
+  // its caller doesn't supply one (compiler/layout/materialize.js line 47),
+  // and this compile() call never did — that gap was invisible before this
+  // integration because nothing consumed the Kernel's LayoutIR for
+  // rendering. ir-experimental-renderer.js's OWN self-materialized path
+  // always computed real hints via `detectGeometry(graph, {})` (the same
+  // call below, same empty opts — no detector redesign). Without this, 2
+  // real container nodes in the why-participate fixture (src:39:9/39:22,
+  // the two-cards-same-row geometry case documented elsewhere in this repo)
+  // lose their inferred flow-row classification and fall back to `unknown`,
+  // which cascades into a large, wrong rendering diff for their entire
+  // subtree — verified empirically before this fix, not assumed.
+  const detectedGeometry = ndg ? detectGeometry(ndg.graph, {}) : null;
+  let layout = null;
   if (engines.layout) {
     const t = Date.now();
-    const layout = await job.projectLayoutIR({
+    layout = await job.projectLayoutIR({
       sliceId: options.layoutSliceId || `slice:layout:${graphId}`,
+      recognitionHintsByNode: detectedGeometry ? detectedGeometry.recognitionHintsByNode : undefined,
     });
     timings.layoutMs = Date.now() - t;
     steps.push({ stage: 'layout-ir', sliceId: layout.sliceId, checksum: layout.checksum });
@@ -108,13 +139,19 @@ async function compile(options = {}) {
     }
   }
 
+  // Kernel Integration, slice 3 — hoisted so the real projected ComponentIR's
+  // `.detected` (compiler/components/materialize.js's materializeComponentIR()
+  // exposes the exact same detectComponents() output ir-experimental-renderer.js
+  // would otherwise self-compute) can be threaded through to emitArtifacts()
+  // below via opts.precomputedComponentRecognition (Phase 6 increment 3).
+  let componentIr = null;
   if (engines.component) {
     const t = Date.now();
-    const out = await job.projectComponentIR({
+    componentIr = await job.projectComponentIR({
       sliceId: options.componentSliceId || `slice:component:${graphId}`,
     });
     timings.componentMs = Date.now() - t;
-    steps.push({ stage: 'component-ir', sliceId: out.sliceId, checksum: out.checksum });
+    steps.push({ stage: 'component-ir', sliceId: componentIr.sliceId, checksum: componentIr.checksum });
   }
 
   if (engines.token) {
@@ -135,13 +172,19 @@ async function compile(options = {}) {
     steps.push({ stage: 'semantic-ir', sliceId: out.sliceId, checksum: out.checksum });
   }
 
+  // Kernel Integration, slice 4 — hoisted so the real projected ResponsiveIR's
+  // `.detected` (compiler/responsive/materialize.js's materializeResponsiveIR()
+  // exposes the exact same detectResponsive() output ir-experimental-renderer.js
+  // would otherwise self-compute) can be threaded through to emitArtifacts()
+  // below via opts.precomputedResponsive (Phase 6 increment 5).
+  let responsiveIr = null;
   if (engines.responsive) {
     const t = Date.now();
-    const out = await job.projectResponsiveIR({
+    responsiveIr = await job.projectResponsiveIR({
       sliceId: options.responsiveSliceId || `slice:responsive:${graphId}`,
     });
     timings.responsiveMs = Date.now() - t;
-    steps.push({ stage: 'responsive-ir', sliceId: out.sliceId, checksum: out.checksum });
+    steps.push({ stage: 'responsive-ir', sliceId: responsiveIr.sliceId, checksum: responsiveIr.checksum });
   }
 
   if (engines.accessibility) {
@@ -222,6 +265,11 @@ async function compile(options = {}) {
       fingerprint,
       workspace,
       emitPlan: workspace.getIrSlice(emitPlan.sliceId),
+      // Kernel Integration — only read by emitArtifactsIrExperimental() (the
+      // legacy path never references opts.graphId); ensures the graphId this
+      // ir-experimental render is labeled with matches the one `ndg` (passed
+      // below as precomputedNdg) was actually materialized under.
+      graphId,
       outDir,
       title: options.title,
       slug: options.slug,
@@ -236,6 +284,25 @@ async function compile(options = {}) {
       useCache: options.useCache,
       emitMode: options.emitMode,
       renderer: options.renderer,
+      // Kernel Integration — only meaningful for renderer:'ir-experimental'
+      // (compiler/artifacts/index.js's emitArtifactsIrExperimental() reads
+      // this; the legacy path ignores it entirely). `null` when
+      // options.skipNdg is set, in which case the renderer transparently
+      // falls back to self-materializing exactly as before this change.
+      precomputedNdg: ndg,
+      // Kernel Integration, slice 2 — `null` when engines.layout is false,
+      // in which case the renderer's own `||` fallback (Phase 6 increment 4)
+      // self-computes interpretations exactly as before this change.
+      precomputedInterpretations: layout && layout.interpretations,
+      // Kernel Integration, slice 3 — `null` when engines.component is
+      // false, in which case the renderer's own `||` fallback (Phase 6
+      // increment 3) self-computes componentRecognition exactly as before.
+      precomputedComponentRecognition: componentIr && componentIr.detected,
+      // Kernel Integration, slice 4 — `null` when engines.responsive is
+      // false, in which case the renderer's own `||` fallback (Phase 6
+      // increment 5) self-computes the responsive detection exactly as
+      // before.
+      precomputedResponsive: responsiveIr && responsiveIr.detected,
     });
     timings.artifactsMs = Date.now() - t;
     steps.push({

@@ -1,0 +1,641 @@
+openapi: 3.1.0
+info:
+  title: Lovable Extractor Public API
+  version: "1.0.0"
+  summary: Frozen public HTTP contract for Figma→HTML convert and ops probes
+  description: |
+    Public API v1 for convert, health, and readiness.
+
+    Legacy routes remain supported for backward compatibility:
+    - `POST /api/figma/convert` ≡ `POST /api/v1/convert`
+    - `GET /health` ≡ `GET /api/v1/health`
+    - `GET /ready` ≡ `GET /api/v1/ready`
+    - `GET /api/health` returns `{ ok: true }` (compat-only)
+
+    Response envelope (convert):
+    - Success: `{ ok: true, requestId, ...domain }`
+    - Error: `{ ok: false, errorCode, message, error, requestId, ...domain }`
+
+    Domain payload fields and semantics are unchanged from pre-v1 behavior.
+  contact:
+    name: Platform
+servers:
+  - url: http://localhost:3001
+    description: Local default
+tags:
+  - name: Convert
+  - name: Operations
+  - name: Compatibility
+paths:
+  /api/v1/convert:
+    post:
+      tags: [Convert]
+      operationId: convertV1
+      summary: Convert a Figma design URL to HTML/CSS
+      description: |
+        Canonical convert endpoint. Same handler as `POST /api/figma/convert`.
+        Sets response header `X-API-Version: 1`.
+      security:
+        - FigmaTokenBody: []
+        - FigmaTokenEnv: []
+      parameters:
+        - $ref: "#/components/parameters/ApiVersionHeader"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ConvertRequest"
+            examples:
+              basic:
+                summary: Design URL (token from env/OAuth)
+                value:
+                  url: "https://www.figma.com/design/AbCdEfGhIjKlMnOpQrStUv/MyFile?node-id=1-2"
+              withToken:
+                summary: Explicit PAT
+                value:
+                  url: "https://www.figma.com/design/AbCdEfGhIjKlMnOpQrStUv/MyFile?node-id=1-2"
+                  token: "figd_***"
+                  refresh: false
+      responses:
+        "200":
+          description: Conversion succeeded
+          headers:
+            X-API-Version:
+              schema:
+                type: string
+                const: "1"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ConvertSuccess"
+              examples:
+                hit:
+                  summary: Cache HIT success
+                  value:
+                    ok: true
+                    requestId: "a1b2c3d4e5f60718"
+                    html: "<!DOCTYPE html>..."
+                    css: "/* ... */"
+                    scripts:
+                      script.js: ""
+                    sectionsSummary: "Hero"
+                    sections: []
+                    source: "figma-compiler"
+                    cache:
+                      status: "HIT"
+                      reason: "exact"
+                      restCalls: 0
+                      compileMs: 120
+                    compiler:
+                      graphId: "g:figma:AbCdEfGhIjKlMnOpQrStUv:1:2"
+                      steps: ["ndg", "emit"]
+                      artifactFingerprint: "abc"
+                      timings: {}
+                      fingerprint:
+                        ndgChecksum: "x"
+                        emitPlanChecksum: "y"
+                        resolvedIrChecksum: "z"
+                    output:
+                      dir: "/path/output/my-file"
+                      slug: "my-file"
+                      assets: 3
+                    previewUrl: "/preview/my-file/"
+                    budget:
+                      outcome: "Allow"
+                      reason: "within_budget"
+                      predictedTier1: 0
+                      predictedTier2: 0
+                      warnings: []
+                      retryAfter: null
+                      retryAfterUntil: null
+                      estimatedRemaining: null
+                      degrade: null
+                      predictionReason: "cache_hit"
+        "400":
+          description: Invalid request body or URL
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+              examples:
+                invalidUrl:
+                  value:
+                    ok: false
+                    errorCode: "INVALID_URL"
+                    message: "Please provide a valid Figma design URL."
+                    error: "Please provide a valid Figma design URL."
+                    requestId: "a1b2c3d4e5f60718"
+        "401":
+          description: Missing Figma authentication
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+              examples:
+                auth:
+                  value:
+                    ok: false
+                    errorCode: "FIGMA_AUTH_REQUIRED"
+                    message: "A Figma token is required. Paste a Personal Access Token, set FIGMA_TOKEN in .env, or click \"Connect Figma\"."
+                    error: "A Figma token is required. Paste a Personal Access Token, set FIGMA_TOKEN in .env, or click \"Connect Figma\"."
+                    requestId: "a1b2c3d4e5f60718"
+        "429":
+          description: Budget Deny or Figma rate limit
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ConvertBudgetError"
+              examples:
+                budgetDeny:
+                  value:
+                    ok: false
+                    errorCode: "BUDGET_DENY"
+                    message: "Budget Deny: rate_limit_lock_active"
+                    error: "Budget Deny: rate_limit_lock_active"
+                    requestId: "a1b2c3d4e5f60718"
+                    stage: "MISS"
+                    fileKey: "AbCdEfGhIjKlMnOpQrStUv"
+                    nodeId: "1:2"
+                    cache:
+                      status: "MISS"
+                      reason: "no_snapshot"
+                      restCalls: 0
+                      compileMs: 5
+                    budget:
+                      outcome: "Deny"
+                      reason: "rate_limit_lock_active"
+                      predictedTier1: 2
+                      predictedTier2: 1
+                      warnings: ["Rate-limit lock active"]
+                      retryAfter: 60
+                      retryAfterUntil: 1720000060000
+                      estimatedRemaining: null
+                      degrade:
+                        preferCache: true
+                        skipPng: true
+                        skipSvg: true
+                        queueRequest: true
+                      predictionReason: "lock"
+        "503":
+          description: Budget Queue (retry later)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ConvertBudgetError"
+              examples:
+                budgetQueue:
+                  value:
+                    ok: false
+                    errorCode: "BUDGET_QUEUE"
+                    message: "Budget Queue: soft_cap"
+                    error: "Budget Queue: soft_cap"
+                    requestId: "a1b2c3d4e5f60718"
+                    stage: "MISS"
+                    fileKey: "AbCdEfGhIjKlMnOpQrStUv"
+                    nodeId: "1:2"
+                    cache:
+                      status: "MISS"
+                      reason: "no_snapshot"
+                      restCalls: 0
+                      compileMs: 4
+                    budget:
+                      outcome: "Queue"
+                      reason: "soft_cap"
+                      predictedTier1: 3
+                      predictedTier2: 1
+                      warnings: ["Queued due to budget soft cap"]
+                      retryAfter: 30
+                      retryAfterUntil: 1720000030000
+                      estimatedRemaining: null
+                      degrade: null
+                      predictionReason: "soft_cap"
+        "500":
+          description: Conversion failed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ConvertRuntimeError"
+
+  /api/figma/convert:
+    post:
+      tags: [Compatibility]
+      operationId: convertLegacy
+      summary: Legacy convert (identical to /api/v1/convert)
+      description: Backward-compatible alias. Prefer `/api/v1/convert` for new integrations.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ConvertRequest"
+      responses:
+        "200":
+          description: Same as convertV1
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ConvertSuccess"
+        "400":
+          $ref: "#/components/responses/Error400"
+        "401":
+          $ref: "#/components/responses/Error401"
+        "429":
+          description: Budget Deny
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ConvertBudgetError"
+        "503":
+          description: Budget Queue
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ConvertBudgetError"
+
+  /api/v1/health:
+    get:
+      tags: [Operations]
+      operationId: healthV1
+      summary: Liveness probe
+      description: Process is up. No internal implementation details. Identical to `GET /health`.
+      responses:
+        "200":
+          description: Service is alive
+          headers:
+            X-API-Version:
+              schema:
+                type: string
+                const: "1"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthResponse"
+              examples:
+                ok:
+                  value:
+                    status: "ok"
+                    uptime: 3600
+                    cache: "ok"
+                    budget: "ok"
+                    compiler: "ok"
+
+  /health:
+    get:
+      tags: [Compatibility]
+      operationId: healthLegacy
+      summary: Legacy liveness (identical to /api/v1/health)
+      responses:
+        "200":
+          description: Service is alive
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthResponse"
+
+  /api/v1/ready:
+    get:
+      tags: [Operations]
+      operationId: readyV1
+      summary: Readiness probe
+      description: Safe to receive traffic. Identical to `GET /ready`.
+      responses:
+        "200":
+          description: Ready
+          headers:
+            X-API-Version:
+              schema:
+                type: string
+                const: "1"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReadyOk"
+              examples:
+                ready:
+                  value:
+                    ready: true
+        "503":
+          description: Not ready
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReadyNotOk"
+              examples:
+                notReady:
+                  value:
+                    ready: false
+                    configuration: "ok"
+                    filesystem: "error"
+                    budgetStore: "error"
+                    cache: "error"
+
+  /ready:
+    get:
+      tags: [Compatibility]
+      operationId: readyLegacy
+      summary: Legacy readiness (identical to /api/v1/ready)
+      responses:
+        "200":
+          description: Ready
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReadyOk"
+        "503":
+          description: Not ready
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReadyNotOk"
+
+  /api/health:
+    get:
+      tags: [Compatibility]
+      operationId: healthCompatMinimal
+      summary: Minimal compat health
+      description: Older clients only. Prefer `/api/v1/health`.
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [ok]
+                properties:
+                  ok:
+                    type: boolean
+                    const: true
+                additionalProperties: false
+
+components:
+  parameters:
+    ApiVersionHeader:
+      name: X-API-Version
+      in: header
+      required: false
+      description: Echoed on `/api/v1/*` responses as `1`
+      schema:
+        type: string
+
+  securitySchemes:
+    FigmaTokenBody:
+      type: apiKey
+      in: header
+      name: unused
+      description: |
+        Prefer request body `token` (PAT) or server env `FIGMA_TOKEN` / OAuth session.
+        Documented here for SDK clarity; not an HTTP header scheme.
+    FigmaTokenEnv:
+      type: apiKey
+      in: header
+      name: unused
+      description: Server-side FIGMA_TOKEN when body token omitted
+
+  responses:
+    Error400:
+      description: Bad request
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorEnvelope"
+    Error401:
+      description: Unauthorized
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorEnvelope"
+
+  schemas:
+    ConvertRequest:
+      type: object
+      required: [url]
+      additionalProperties: true
+      properties:
+        url:
+          type: string
+          minLength: 1
+          maxLength: 2048
+          description: Figma design/file/proto URL
+          examples:
+            - "https://www.figma.com/design/AbCdEfGhIjKlMnOpQrStUv/File?node-id=1-2"
+        token:
+          type: string
+          maxLength: 512
+          description: Optional Figma Personal Access Token
+        refresh:
+          description: Bypass cache when true / 1
+          oneOf:
+            - type: boolean
+            - type: integer
+              enum: [0, 1]
+            - type: string
+              enum: ["0", "1"]
+        force:
+          description: Override soft budget Deny/Queue (not rate-limit lock)
+          oneOf:
+            - type: boolean
+            - type: integer
+              enum: [1]
+            - type: string
+              enum: ["1"]
+
+    ErrorEnvelope:
+      type: object
+      required: [ok, errorCode, message, error, requestId]
+      properties:
+        ok:
+          type: boolean
+          const: false
+        errorCode:
+          type: string
+          minLength: 1
+        message:
+          type: string
+        error:
+          type: string
+          description: Legacy alias of message
+        requestId:
+          type: ["string", "null"]
+        details:
+          type: object
+          additionalProperties: true
+      additionalProperties: true
+
+    CacheInfo:
+      type: object
+      required: [status, reason, restCalls, compileMs]
+      properties:
+        status:
+          type: string
+          enum: [HIT, SUBTREE, MISS]
+        reason:
+          type: string
+        restCalls:
+          type: number
+        compileMs:
+          type: number
+      additionalProperties: true
+
+    BudgetInfo:
+      type: object
+      required: [outcome, reason]
+      properties:
+        outcome:
+          type: string
+          enum: [Allow, Warn, Queue, Degrade, Deny]
+        reason:
+          type: string
+        predictedTier1:
+          type: ["number", "null"]
+        predictedTier2:
+          type: ["number", "null"]
+        warnings:
+          type: array
+          items:
+            type: string
+        retryAfter:
+          type: ["number", "null"]
+        retryAfterUntil:
+          type: ["number", "null"]
+        estimatedRemaining:
+          type: ["object", "null"]
+          additionalProperties: true
+        degrade:
+          type: ["object", "null"]
+          additionalProperties: true
+        predictionReason:
+          type: ["string", "null"]
+      additionalProperties: true
+
+    ConvertSuccess:
+      type: object
+      required:
+        - ok
+        - requestId
+        - html
+        - css
+        - scripts
+        - source
+        - cache
+        - budget
+      properties:
+        ok:
+          type: boolean
+          const: true
+        requestId:
+          type: string
+        html:
+          type: string
+        css:
+          type: string
+        scripts:
+          type: object
+          additionalProperties:
+            type: string
+        sectionsSummary:
+          type: ["string", "null"]
+        sections:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+        source:
+          type: string
+          const: figma-compiler
+        cache:
+          $ref: "#/components/schemas/CacheInfo"
+        compiler:
+          type: object
+          additionalProperties: true
+        output:
+          type: ["object", "null"]
+          additionalProperties: true
+        previewUrl:
+          type: ["string", "null"]
+        budget:
+          $ref: "#/components/schemas/BudgetInfo"
+      additionalProperties: true
+
+    ConvertBudgetError:
+      allOf:
+        - $ref: "#/components/schemas/ErrorEnvelope"
+        - type: object
+          required: [stage, fileKey, cache, budget]
+          properties:
+            stage:
+              type: string
+            fileKey:
+              type: string
+            nodeId:
+              type: ["string", "null"]
+            cache:
+              $ref: "#/components/schemas/CacheInfo"
+            budget:
+              $ref: "#/components/schemas/BudgetInfo"
+
+    ConvertRuntimeError:
+      allOf:
+        - $ref: "#/components/schemas/ErrorEnvelope"
+        - type: object
+          properties:
+            stage:
+              type: string
+            fileKey:
+              type: string
+            nodeId:
+              type: ["string", "null"]
+            budget:
+              $ref: "#/components/schemas/BudgetInfo"
+
+    HealthResponse:
+      type: object
+      required: [status, uptime, cache, budget, compiler]
+      additionalProperties: false
+      properties:
+        status:
+          type: string
+          const: ok
+        uptime:
+          type: integer
+          minimum: 0
+        cache:
+          type: string
+          enum: [ok, degraded]
+        budget:
+          type: string
+          enum: [ok, degraded]
+        compiler:
+          type: string
+          enum: [ok, degraded]
+
+    ReadyOk:
+      type: object
+      required: [ready]
+      additionalProperties: false
+      properties:
+        ready:
+          type: boolean
+          const: true
+
+    ReadyNotOk:
+      type: object
+      required: [ready, configuration, filesystem, budgetStore, cache]
+      additionalProperties: false
+      properties:
+        ready:
+          type: boolean
+          const: false
+        configuration:
+          type: string
+          enum: [ok, error]
+        filesystem:
+          type: string
+          enum: [ok, error]
+        budgetStore:
+          type: string
+          enum: [ok, error]
+        cache:
+          type: string
+          enum: [ok, error]

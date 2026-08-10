@@ -1,0 +1,17 @@
+{
+  "contractId": "KnowledgeBundle",
+  "bundleId": "compiler-ui-composed",
+  "version": "1.0.0",
+  "suiteVersion": "1.0.0",
+  "createdAt": "2026-07-18T00:00:00.000Z",
+  "description": "Composition root referencing base + overlay layers",
+  "layers": [
+    { "bundleId": "compiler-ui-ontology", "version": "1.0.0" },
+    { "bundleId": "compiler-ui-ontology-overlay", "version": "1.0.0" }
+  ],
+  "dependencies": [],
+  "entries": [],
+  "relations": [],
+  "packs": [],
+  "priors": []
+}

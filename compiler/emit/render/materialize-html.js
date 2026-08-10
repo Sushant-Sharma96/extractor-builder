@@ -31,7 +31,7 @@
  * mutated figma-build element tree.
  */
 
-const { buildDecls, canvasDecls, declString, declBody, isPositionedAbsolute } = require('./css-declarations');
+const { buildDecls, canvasDecls, declString, declBody, isPositionedAbsolute, px } = require('./css-declarations');
 const { chooseTag } = require('./tag');
 const { CSS_RESET_BLOCK } = require('./utility-css');
 const { buildResponsiveMediaCss } = require('./responsive-media');
@@ -65,19 +65,32 @@ function textRuns(node) {
   return runs;
 }
 
-/** Port of server/figma-build.js's runStyleCss() — unchanged (uses local figmaColor/px). */
+/**
+ * docs/STYLE_RESOLVER_ARCHITECTURE.md Section 5.2 — per-character-run
+ * style, now sharing the SAME resolveTypography() the whole-node path
+ * (css-declarations.js's modeDecls()) uses, instead of a second, smaller,
+ * independent re-implementation. This closes a real, confirmed gap: the
+ * old separate implementation here never read `textCase` at all and only
+ * handled `textDecoration:UNDERLINE` (silently dropping STRIKETHROUGH) —
+ * both now behave identically to the whole-node path. `color` stays a
+ * separate, untouched concern (a paint/fill decision, not typography —
+ * see resolveTypography()'s own header comment). Property ORDER in the
+ * resulting inline-style string differs from the old implementation's
+ * (fontFamily now emits first, matching the whole-node path's own order,
+ * rather than last) — harmless, since these are non-conflicting CSS
+ * properties; only ever visible as a byte-diff artifact, never a real
+ * rendering difference.
+ */
 function runStyleCss(s) {
-  const { figmaColor, px } = require('./css-declarations');
+  const { figmaColor } = require('./css-declarations');
+  const { resolveTypography } = require('../../style');
   const d = [];
   const fills = (s.fills || []).filter((f) => f.visible !== false);
   const top = fills[fills.length - 1];
   if (top && top.type === 'SOLID') d.push(`color:${figmaColor(top.color, top.opacity)}`);
-  if (s.fontWeight) d.push(`font-weight:${s.fontWeight}`);
-  if (s.italic || /italic|oblique/i.test(s.fontStyle || '')) d.push('font-style:italic');
-  if (s.fontSize) d.push(`font-size:${px(s.fontSize)}`);
-  if (s.letterSpacing) d.push(`letter-spacing:${px(s.letterSpacing)}`);
-  if (s.textDecoration === 'UNDERLINE') d.push('text-decoration:underline');
-  if (s.fontFamily) d.push(`font-family:'${s.fontFamily}', sans-serif`);
+  for (const [prop, value] of resolveTypography(s)) {
+    d.push(`${prop}:${value}`);
+  }
   return d.join(';');
 }
 
@@ -248,17 +261,61 @@ function renderSections(root, registry, indent) {
 }
 
 /**
+ * Real, confirmed bug (Figma file eOwzPCQP0f3sAxzI0T0b9d, "Group 357", the
+ * "3 Month" clock icon on each recommended-course card): Figma's common
+ * "paste an icon-font glyph as a text layer" workflow sets that text node's
+ * `fontName` to an ICON font (here "Font Awesome 5 Free") — this is a
+ * legitimate, correctly-ingested font-family name (NDG/ingest.js reads it
+ * faithfully, and even preserves the raw Unicode codepoint the glyph itself
+ * needs, U+F017 — Font Awesome 5's own "clock" character, verified byte-for-
+ * byte against the compiled HTML). But every icon font's actual font FILE
+ * lives on its own CDN, never on Google Fonts — routing it through
+ * `fontsLink()`'s Google Fonts query (as every other collected family is)
+ * requests a family Google Fonts doesn't have, silently fails to load, and
+ * the browser falls back to a "tofu" box for that codepoint — exactly the
+ * broken square glyph the user's screenshot shows standing in for a clock.
+ * Real Figma designs routinely use icon fonts this way (small UI glyphs are
+ * a common lightweight alternative to individual vector icons), so this is
+ * a general gap, not specific to this one card. Known icon-font families
+ * are routed to their own real, official CDN stylesheet instead of the
+ * Google Fonts query; anything not recognized as an icon font still goes
+ * through the unchanged Google Fonts path below.
+ */
+const ICON_FONT_STYLESHEETS = {
+  'font awesome 5 free': 'https://cdnjs.cloudflare.com/ajax/libs/font-awesome/5.15.4/css/all.min.css',
+  'font awesome 5 brands': 'https://cdnjs.cloudflare.com/ajax/libs/font-awesome/5.15.4/css/all.min.css',
+  'font awesome 6 free': 'https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.2/css/all.min.css',
+  'font awesome 6 brands': 'https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.2/css/all.min.css',
+};
+
+/**
  * Port of server/figma-build.js's fontsLink() — unchanged URL-building
  * formula (same query-param format: one `family=<name>:wght@400;500;600;700`
- * param per unique font family, `+` for spaces, `&display=swap`).
+ * param per unique font family, `+` for spaces, `&display=swap`) for real
+ * Google Fonts families. Icon fonts (see ICON_FONT_STYLESHEETS above) are
+ * split out and given their own `<link>` to their real CDN instead.
  * @param {string[]} [fonts]
- * @returns {string} the two `<link>` tags, or '' if no real fonts were found.
+ * @returns {string} the combined `<link>` tags, or '' if no real fonts were found.
  */
 function fontsLink(fonts) {
   const fams = [...new Set((fonts || []).filter(Boolean))];
   if (!fams.length) return '';
-  const q = fams.map((f) => `family=${encodeURIComponent(f).replace(/%20/g, '+')}:wght@400;500;600;700`).join('&');
-  return `  <link rel="preconnect" href="https://fonts.googleapis.com">\n  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?${q}&display=swap">`;
+  const iconFontUrls = new Set();
+  const googleFams = [];
+  for (const f of fams) {
+    const url = ICON_FONT_STYLESHEETS[f.trim().toLowerCase()];
+    if (url) iconFontUrls.add(url);
+    else googleFams.push(f);
+  }
+  const links = [];
+  if (googleFams.length) {
+    const q = googleFams.map((f) => `family=${encodeURIComponent(f).replace(/%20/g, '+')}:wght@400;500;600;700`).join('&');
+    links.push(`  <link rel="preconnect" href="https://fonts.googleapis.com">\n  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?${q}&display=swap">`);
+  }
+  for (const url of iconFontUrls) {
+    links.push(`  <link rel="stylesheet" href="${url}">`);
+  }
+  return links.join('\n');
 }
 
 /**
@@ -294,7 +351,7 @@ ${body}
  * blocks (in section order), then the fixed responsive/standards block.
  *
  * @param {RenderNode} root
- * @param {{ title?: string, canvas?: { fillCss?: string, box?: {width:number,height:number}, clips?: boolean }, fonts?: string[] }} [opts]
+ * @param {{ title?: string, canvas?: { fillCss?: string, box?: {width:number,height:number}, clips?: boolean, padding?: {top?:number,right?:number,bottom?:number,left?:number} }, fonts?: string[] }} [opts]
  *   `opts.fonts` — real font family names used across the document (collected
  *   by ir-experimental-renderer.js's `buildRenderNode`); emits a Google Fonts
  *   `<link>` in the document `<head>` when non-empty (see `fontsLink()`).
@@ -325,10 +382,26 @@ function materializeHtml(root, opts = {}) {
 
   const parts = [`/* styles.css — generated by compiler/emit/render (Phase 3 renderer) */`, CSS_RESET_BLOCK];
 
-  const canvas = opts.canvas || (root.box ? { fillCss: root.fillCss, box: root.box, clips: root.clips } : null);
+  const canvas = opts.canvas
+    || (root.box ? {
+      fillCss: root.fillCss, box: root.box, clips: root.clips, padding: root.padding, sectionGap: root.gap,
+    } : null);
   if (canvas && (canvas.fillCss || canvas.box)) {
     const decls = canvasDecls(canvas);
     if (decls.length) parts.push(`/* --- page --- */\n.et-page {\n${declBody(decls)}\n}`);
+  }
+  // The ROOT node's own Auto Layout gap (`itemSpacing`) BETWEEN its
+  // top-level children — see ir-experimental-renderer.js's `gap` comment on
+  // the RenderNode return for the full root-cause writeup (real bug: Figma
+  // node 43:2, "section.section-light", itemSpacing:84 rendered as a hard
+  // 0px gap). `renderSections()` above already emitted each root child as
+  // its own sibling `<section>`/`<header>`/`<footer>` with zero shared
+  // container to hang a flexbox `gap` off — a plain adjacent-sibling
+  // selector (matching CSS `gap`'s own "between every pair, not just after
+  // the first" semantics, without needing to know each section's tag name)
+  // is the direct fix.
+  if (canvas && Number.isFinite(canvas.sectionGap) && canvas.sectionGap > 0 && sectionOrder.length > 1) {
+    parts.push(`/* --- page section spacing --- */\n.et-page > * + * {\n  margin-top: ${px(canvas.sectionGap)};\n}`);
   }
 
   const ruleFor = (name) => {

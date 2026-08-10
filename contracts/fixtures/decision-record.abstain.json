@@ -1,0 +1,24 @@
+{
+  "contractId": "DecisionRecord",
+  "suiteVersion": "1.0.0",
+  "id": "dec-html-tag-abstain-1",
+  "subject": "src:1:2",
+  "question": "html.tag",
+  "candidates": [
+    { "candidateId": "cand-section", "answer": { "tag": "section" } },
+    { "candidateId": "cand-div", "answer": { "tag": "div" } }
+  ],
+  "evidence": [
+    { "evidenceId": "ev-1", "kind": "feature", "ref": "ambiguousRegion" }
+  ],
+  "scores": [
+    { "candidateId": "cand-section", "value": 0.51 },
+    { "candidateId": "cand-div", "value": 0.5 }
+  ],
+  "ranking": ["cand-section", "cand-div"],
+  "winner": { "kind": "abstain", "reason": "margin below policy margin_min" },
+  "policy": { "profileId": "pixel-faithful" },
+  "status": "arbitrated",
+  "alternatives_kept": ["cand-section", "cand-div"],
+  "trace_refs": ["trace:dec-html-tag-abstain-1"]
+}

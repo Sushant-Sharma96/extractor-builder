@@ -1,0 +1,27 @@
+{
+  "contractId": "QualityReport",
+  "suiteVersion": "1.0.0",
+  "reportId": "qr-1",
+  "policyProfileId": "semantic-lean",
+  "scores": {
+    "pixelFidelity": null,
+    "layoutFidelity": null,
+    "semanticScore": null,
+    "responsiveScore": null,
+    "accessibilityScore": null,
+    "animationFidelity": null,
+    "interactionCompleteness": null,
+    "tokenQuality": null,
+    "domComplexity": null,
+    "cssComplexity": null,
+    "performance": null,
+    "maintainability": null,
+    "confidence": null,
+    "recoveryRate": null,
+    "provenanceCoverage": null
+  },
+  "violations": [],
+  "decisionTraceRefs": ["trace:dec-html-tag-winner-1"],
+  "recoveryNotes": [],
+  "fallbackNotes": []
+}

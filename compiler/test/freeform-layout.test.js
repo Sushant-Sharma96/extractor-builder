@@ -145,6 +145,46 @@ function mkInsetCard(idPrefix, x) {
   };
 }
 
+/** Mirrors the real "Blogs" card shape (Figma node 84:7): a full-bleed photo
+ *  (flush with the card's own left edge, 0 inset) stacked above a title text
+ *  that IS genuinely inset (16px) — the exact mixed-inset shape a single
+ *  group-level crossInset can't express (see this test file's own
+ *  "crossInset is PER COLUMN" test). */
+function mkMixedInsetCard(idPrefix, x) {
+  return {
+    id: idPrefix,
+    type: 'GROUP',
+    absoluteBoundingBox: { x, y: 0, width: 200, height: 300 },
+    children: [
+      {
+        id: `${idPrefix}-photo`,
+        type: 'RECTANGLE',
+        fills: [{ type: 'SOLID' }],
+        absoluteBoundingBox: { x, y: 0, width: 200, height: 200 },
+      },
+      {
+        id: `${idPrefix}-title`,
+        type: 'GROUP',
+        absoluteBoundingBox: { x: x + 16, y: 220, width: 140, height: 24 },
+        children: [{ id: `${idPrefix}-title-t`, type: 'TEXT', characters: 'Title', absoluteBoundingBox: { x: x + 16, y: 220, width: 140, height: 24 } }],
+      },
+    ],
+  };
+}
+
+function mixedInsetCardRowDoc() {
+  return {
+    id: 'mixed-cards',
+    type: 'GROUP',
+    absoluteBoundingBox: { x: 0, y: 0, width: 700, height: 300 },
+    children: [
+      mkMixedInsetCard('mc0', 0),
+      mkMixedInsetCard('mc1', 250),
+      mkMixedInsetCard('mc2', 500),
+    ],
+  };
+}
+
 function insetCardRowDoc() {
   return {
     id: 'inset-cards',
@@ -303,12 +343,12 @@ async function main() {
 
   // ─── (c) wrapper unwrap — the row-1-vs-row-2 asymmetry, synthetically ────
 
-  await test('unwrapChild — a wide multi-child wrapper is replaced by its own children', () => {
+  await test('unwrapChild — a wide multi-child wrapper bundling real content (text/image grandkids) is replaced by its own children', () => {
     const memberBox = { x: 121, y: 0, w: 1196, h: 177 };
     const wrapper = { node: { id: 'wrap' }, box: { x: 142, y: 48, w: 984, h: 80 } };
     const grandkids = [
-      { id: 'g0', box: { x: 142, y: 48, width: 40, height: 80 } },
-      { id: 'g1', box: { x: 231, y: 48, width: 424, height: 80 } },
+      { id: 'g0', type: 'TEXT', box: { x: 142, y: 48, width: 40, height: 80 } },
+      { id: 'g1', type: 'TEXT', box: { x: 231, y: 48, width: 424, height: 80 } },
     ];
     const childrenOfFn = (id) => (id === 'wrap' ? grandkids : []);
     const out = unwrapChild(wrapper, memberBox, 'column', childrenOfFn, 0);
@@ -319,9 +359,35 @@ async function main() {
   await test('unwrapChild — a narrow child (e.g. the action button) is left alone, not unwrapped', () => {
     const memberBox = { x: 121, y: 0, w: 1196, h: 177 };
     const button = { node: { id: 'button' }, box: { x: 1164, y: 40, w: 123, h: 38 } };
-    const childrenOfFn = () => [{ id: 'button-text', box: { x: 1174, y: 46, width: 103, height: 18 } }];
+    const childrenOfFn = () => [{ id: 'button-text', type: 'TEXT', box: { x: 1174, y: 46, width: 103, height: 18 } }];
     const out = unwrapChild(button, memberBox, 'column', childrenOfFn, 0);
     assert(out.length === 1 && out[0].node.id === 'button', 'narrow child kept as-is');
+  });
+
+  await test('unwrapChild — a wide multi-child wrapper whose grandkids are ALL plain decorative shapes (no text, no image fill) is NOT unwrapped (real, confirmed bug: Figma file eOwzPCQP0f3sAxzI0T0b9d, "Group 357" — a small icon glyph made of 4 identical 10x10 rectangles, wrapper spanning ~95% of its 22px-tall parent, was being unwrapped exactly like a genuine multi-column content wrapper; one of its 4 rectangles then got pulled in as "resolved column content" while its 3 siblings did not, losing its normal absolute position and rendering as an invisible box, breaking the icon)', () => {
+    const memberBox = { x: 0, y: 0, w: 93, h: 22 };
+    const iconWrapper = { node: { id: 'icon-wrap' }, box: { x: 0, y: 0, w: 21, h: 21 } };
+    const decorativeGrandkids = [
+      { id: 'sq0', type: 'RECTANGLE', box: { x: 0, y: 0, width: 10, height: 10 } },
+      { id: 'sq1', type: 'RECTANGLE', box: { x: 11, y: 0, width: 10, height: 10 } },
+      { id: 'sq2', type: 'RECTANGLE', box: { x: 0, y: 11, width: 10, height: 10 } },
+      { id: 'sq3', type: 'RECTANGLE', box: { x: 11, y: 11, width: 10, height: 10 } },
+    ];
+    const childrenOfFn = (id) => (id === 'icon-wrap' ? decorativeGrandkids : []);
+    const out = unwrapChild(iconWrapper, memberBox, 'row', childrenOfFn, 0);
+    assert(out.length === 1 && out[0].node.id === 'icon-wrap', `expected the icon wrapper kept intact (not unwrapped into its 4 decorative squares), got ${out.length} item(s)`);
+  });
+
+  await test('unwrapChild — a wide multi-child wrapper with a MIX of decorative shapes and one real image grandkid IS unwrapped (any real content signal is enough, even if most siblings are decorative)', () => {
+    const memberBox = { x: 0, y: 0, w: 93, h: 22 };
+    const wrapper = { node: { id: 'mixed-wrap' }, box: { x: 0, y: 0, w: 21, h: 21 } };
+    const mixedGrandkids = [
+      { id: 'sq0', type: 'RECTANGLE', box: { x: 0, y: 0, width: 10, height: 10 } },
+      { id: 'photo', type: 'RECTANGLE', paints: [{ type: 'IMAGE' }], box: { x: 11, y: 0, width: 10, height: 10 } },
+    ];
+    const childrenOfFn = (id) => (id === 'mixed-wrap' ? mixedGrandkids : []);
+    const out = unwrapChild(wrapper, memberBox, 'row', childrenOfFn, 0);
+    assert(out.length === 2, `expected the wrapper unwrapped into its 2 grandkids, got ${out.length}`);
   });
 
   await test('row-set asymmetry — row 1 (single all-in-one wrapper) and rows 2-4 (wrapper + separate button) close onto the SAME 5-column shape', async () => {
@@ -350,7 +416,7 @@ async function main() {
     }
   });
 
-  await test('detectFreeformLayout — crossInset recovers the real, group-uniform cross-axis content inset (real bug: Incentives\' cards render their icon/title/description flush-left instead of 40px in, because positionOf() only ever clustered the OTHER axis)', async () => {
+  await test('detectFreeformLayout — each column\'s OWN crossInset recovers the real cross-axis content inset (real bug: Incentives\' cards render their icon/title/description flush-left instead of 40px in, because positionOf() only ever clustered the OTHER axis) — every column happens to share 40px here (this fixture\'s cards are uniformly inset)', async () => {
     const { graph } = await seedNdg(insetCardRowDoc(), 'g-crossinset');
     const componentDetected = detectComponents(graph, {});
     const detected = detectFreeformLayout(graph, { componentDetected });
@@ -358,7 +424,29 @@ async function main() {
     const group = detected.groups.find((g) => g.containerNodeId === containerId);
     assert(group, 'group recognized for inset-cards container');
     assert(group.axis === 'row', `expected axis "row" (members spread along X), got ${group.axis}`);
-    assert(group.crossInset === 40, `expected crossInset=40 (every card's real content inset), got ${group.crossInset}`);
+    assert(group.columns.length >= 1, 'at least one column recognized');
+    for (const col of group.columns) {
+      assert(col.crossInset === 40, `expected every column's own crossInset=40 (every card's real content inset), got ${col.crossInset} for ${col.columnId}`);
+    }
+  });
+
+  await test('detectFreeformLayout — crossInset is PER COLUMN, not group-uniform: a member mixing a full-bleed column (0 inset) with a genuinely inset column keeps each column\'s own correct value, instead of the old group-level min() collapsing everything to the full-bleed column\'s 0 (real bug: Figma file fYKUEGHAxVkJwn8CwvJCsp node 84:7, "Blogs" card 1 — the photo sits flush at 0, but its date/title/avatar rows sit ~16px in)', async () => {
+    const { graph } = await seedNdg(mixedInsetCardRowDoc(), 'g-mixed-crossinset');
+    const componentDetected = detectComponents(graph, {});
+    const detected = detectFreeformLayout(graph, { componentDetected });
+    const containerId = idFor(graph, 'mixed-cards');
+    const group = detected.groups.find((g) => g.containerNodeId === containerId);
+    assert(group, 'group recognized for mixed-cards container');
+    // axis:'row' members cluster their OWN internal content along the
+    // PERPENDICULAR (Y) dimension — so column "order" 0/1 here means
+    // topmost/next Y-band (the photo, then the title below it), not X
+    // position; "width" on a row-axis column is the band's Y-extent
+    // (height), not horizontal width — hence selecting by order, not width.
+    assert(group.columns.length === 2, `expected 2 Y-band columns (photo, title), got ${group.columns.length}`);
+    const photoCol = group.columns.find((c) => c.order === 0);
+    const titleCol = group.columns.find((c) => c.order === 1);
+    assert(photoCol.crossInset === 0, `expected the full-bleed photo column's own crossInset=0, got ${photoCol.crossInset}`);
+    assert(titleCol.crossInset === 16, `expected the inset title column's own crossInset=16, got ${titleCol.crossInset}`);
   });
 
   // ─── (d) union-of-columns with an explicit null ──────────────────────────

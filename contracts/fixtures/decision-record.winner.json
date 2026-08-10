@@ -1,0 +1,25 @@
+{
+  "contractId": "DecisionRecord",
+  "suiteVersion": "1.0.0",
+  "id": "dec-html-tag-winner-1",
+  "subject": "src:1:2",
+  "question": "html.tag",
+  "candidates": [
+    { "candidateId": "cand-section", "answer": { "tag": "section" } },
+    { "candidateId": "cand-div", "answer": { "tag": "div" } }
+  ],
+  "evidence": [
+    { "evidenceId": "ev-1", "kind": "feature", "ref": "rootChildRegion" },
+    { "evidenceId": "ev-2", "kind": "rule_hit", "ref": "rule.semantic.region-block" }
+  ],
+  "scores": [
+    { "candidateId": "cand-section", "value": 0.62, "breakdown": { "evidence": 0.5, "prior": 0.12 } },
+    { "candidateId": "cand-div", "value": 0.55, "breakdown": { "evidence": 0.4, "prior": 0.15 } }
+  ],
+  "ranking": ["cand-section", "cand-div"],
+  "winner": { "kind": "candidate", "candidateId": "cand-section" },
+  "policy": { "profileId": "semantic-lean", "profileVersion": null },
+  "status": "arbitrated",
+  "alternatives_kept": ["cand-div"],
+  "trace_refs": ["trace:dec-html-tag-winner-1"]
+}

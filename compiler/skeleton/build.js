@@ -41,6 +41,9 @@ const {
   boxOf, upperType, isTextNode, hasImageFill, isChromeBgRefined,
 } = require('../rulepack/packs/component-detect/geometry-rules');
 const { detectFreeformLayout } = require('../freeform-layout/detect');
+const { groupByRowOverlap } = require('../geometry/rules/vocabulary');
+const { detectComponents } = require('../components/detect');
+const { detectGeometry } = require('../geometry');
 const {
   BUILDER_VERSION,
   ROLE_ROOT,
@@ -127,37 +130,54 @@ function classifyBaseRole(node, parentNode, kids) {
  * fixture's table rows are stored 001/003/004/002) — so those siblings are
  * resolved by real visual position instead: a strict (y, x) sort.
  *
- * Deliberately NOT a "same visual row" tolerance band around y — an earlier
- * version of this function added one without real-fixture evidence it was
- * needed, which would have made this silently diverge from
- * compiler/geometry/rules/structural-polish.js's orderChildrenVisualY (the
- * already-shipped, already-fixture-proven mechanism this generalizes: a
- * strict (y, x) sort, no banding) for no demonstrated benefit — exactly the
- * kind of unverified, self-introduced guess this whole research effort
- * exists to stop making. Keeping the two provably identical (for the
- * isHeader:false case orderChildrenVisualY's only real caller uses) is what
+ * A previous version of this function used a strict (y, x) sort with no
+ * "same visual row" tolerance band, matching compiler/geometry/rules/
+ * structural-polish.js's orderChildrenVisualY exactly — kept deliberately
+ * un-banded at the time specifically because no real-fixture evidence
+ * justified the risk of diverging from that already-shipped, already-proven
+ * mechanism. That evidence now exists: a real fixture (Figma file
+ * c0kt3mp76RoEiq3CFoeCHa node 39:9, "Why Participate?") has two cards at
+ * y=190 (h=323) and y=230 (h=226) — the same visual row to a human, but a
+ * strict sort ranks them by their 40px top-edge gap instead of their
+ * left-to-right X position, swapping their reading order. Now uses
+ * groupByRowOverlap (compiler/geometry/rules/vocabulary.js) — Y-RANGE
+ * OVERLAP ratio, not top-edge proximity — to decide "same row", then sorts
+ * each row by X. orderChildrenVisualY was updated identically in the same
+ * change, so the two stay provably equivalent (see the dedicated
+ * equivalence test in compiler/test/skeleton.test.js) — this is still what
  * makes it safe to swap one for the other in the renderer.
  */
 function resolveReadingOrder(parentNode, kids) {
   if (isRealAutoLayout(parentNode)) return kids.map((k) => k.id);
 
-  return kids
-    .map((k) => ({ id: k.id, box: boxOf(k) }))
-    .sort((a, b) => {
-      const ay = a.box ? a.box.y : 0;
-      const by = b.box ? b.box.y : 0;
-      if (ay !== by) return ay - by;
-      const ax = a.box ? a.box.x : 0;
-      const bx = b.box ? b.box.x : 0;
-      return ax - bx;
-    })
+  const normalized = kids.map((k) => ({ id: k.id, box: boxOf(k) || { x: 0, y: 0, w: 0, h: 0 } }));
+  normalized.sort((a, b) => a.box.y - b.box.y);
+  const rows = groupByRowOverlap(normalized);
+  return rows
+    .flatMap((row) => [...row].sort((a, b) => a.box.x - b.box.x))
     .map((k) => k.id);
 }
 
 /**
  * @param {object} graph — an NDG graph ({ nodes, edges, graphId }).
- * @param {{ componentDetected?: object }} [opts] — forwarded to
- *   detectFreeformLayout as its optional (non-gating) seed-hint input.
+ * @param {{ componentDetected?: object, componentRecognition?: object }} [opts]
+ *   `componentDetected` — forwarded to detectFreeformLayout as its optional
+ *   (non-gating) seed-hint input; this is `detectComponentGeometry()`'s
+ *   narrower {cardFacts,cardGridFacts,bannerFacts,dividerFacts,rowSetFacts}
+ *   shape (see ir-experimental-renderer.js's own call site), NOT the full
+ *   `detectComponents()` result — the two are deliberately named
+ *   differently in this signature specifically because a real naming
+ *   collision between them (same conceptual name, two different shapes) was
+ *   caught while wiring this option in (docs/COMPILER_REDESIGN_ROADMAP.md
+ *   Phase 3) — silently reusing `componentDetected` for both would have
+ *   made this option a no-op in the active renderer, exactly the
+ *   "ingested/computed but never actually consumed" bug class this whole
+ *   redesign effort exists to close.
+ *   `componentRecognition` — the full `detectComponents()` result (Phase
+ *   2.5: definitions/instances/claimedNodeIds), used ONLY for the
+ *   declared-component-identity precedence below. Computed internally when
+ *   omitted (safe default for any caller — including every existing test —
+ *   that predates this option).
  * @returns {object} DesignSkeleton
  */
 function buildDesignSkeleton(graph, opts = {}) {
@@ -165,6 +185,60 @@ function buildDesignSkeleton(graph, opts = {}) {
   const childrenOfFn = (id) => (childrenOf.get(id) || [])
     .map((ref) => byId.get(ref.id))
     .filter(Boolean);
+
+  // docs/COMPILER_REDESIGN_ROADMAP.md Phase 3 — Component Recognition's
+  // claimed-node set (Phase 2.5) takes precedence over this Skeleton's OWN
+  // geometric clustering below, exactly the "declared beats inferred" rule
+  // already established for layout mode (Research Part 7.5.4), now
+  // enforced as an actual data boundary rather than an unenforced
+  // convention two separately-maintained systems happen not to collide on.
+  // A node with a real Figma componentId/mainComponentId is never ALSO
+  // eligible for this Skeleton's freeform repeating-group clustering below
+  // — see the group-assignment loop's own `componentClaim` check.
+  const componentRecognition = opts.componentRecognition
+    || detectComponents(graph, opts.componentOpts || {});
+  const componentClaimByNodeId = new Map();
+  for (const def of componentRecognition.definitions || []) {
+    componentClaimByNodeId.set(def.nodeId, { kind: 'definition', defId: def.defId });
+  }
+  for (const inst of componentRecognition.instances || []) {
+    componentClaimByNodeId.set(inst.nodeId, {
+      kind: 'instance',
+      defId: inst.defId,
+      variant: inst.variant || null,
+      overrideKeys: inst.overrideKeys || [],
+      // docs/COMPILER_REDESIGN_ROADMAP.md Phase 4 — the actual override
+      // VALUES (Phase 2.5's overrideEntriesFrom(), {key,value} pairs), not
+      // just the key names above. Completes the thread from Component
+      // Recognition's raw detection into this Skeleton's own canonical
+      // per-node fact — before this, overrideKeys reached componentClaim
+      // but overrideEntries (computed since Phase 2.5) stopped one stage
+      // short of it, the same "computed but not threaded to its consumer"
+      // pattern this whole redesign effort exists to close.
+      overrideEntries: inst.overrideEntries || [],
+    });
+  }
+
+  // docs/COMPILER_REDESIGN_ROADMAP.md Phase 3 — expose compiler/geometry's
+  // per-node recognition hints (side-by-side row/column, grid, etc.) and
+  // compiler/rulepack/packs/component-detect's card/banner/divider/row-set
+  // shape facts as part of THIS Skeleton's own per-node output, so a future
+  // consumer reads ONE thing instead of separately calling detectGeometry/
+  // detectComponentGeometry itself — the actual "wrapping" this phase's name
+  // refers to. Deliberately NOT auto-computed internally when omitted (unlike
+  // componentRecognition above): both `opts.geometryDetected` and
+  // `opts.componentDetected` already have an established default contract
+  // (empty hints/facts) relied on by every existing caller that predates this
+  // option — including every synthetic test in compiler/test/skeleton.test.js
+  // — auto-computing a real value here instead would be an unproven,
+  // unvalidated behavior change for those callers, not a safe default.
+  const geometryDetected = opts.geometryDetected || { recognitionHintsByNode: {} };
+  const componentGeometryDetected = opts.componentDetected || {};
+  const cardFactByNodeId = new Map((componentGeometryDetected.cardFacts || []).map((f) => [f.nodeId, f]));
+  const cardGridFactByNodeId = new Map((componentGeometryDetected.cardGridFacts || []).map((f) => [f.nodeId, f]));
+  const bannerFactByNodeId = new Map((componentGeometryDetected.bannerFacts || []).map((f) => [f.nodeId, f]));
+  const dividerFactByNodeId = new Map((componentGeometryDetected.dividerFacts || []).map((f) => [f.nodeId, f]));
+  const rowSetFactByNodeId = new Map((componentGeometryDetected.rowSetFacts || []).map((f) => [f.nodeId, f]));
 
   const entryByNodeId = new Map();
   for (const node of graph.nodes || []) {
@@ -184,6 +258,16 @@ function buildDesignSkeleton(graph, opts = {}) {
       provenance: { kind: 'direct', sourceNodeIds: [node.sourceNodeId || node.id] },
       readingOrder: null, // resolved below, per sibling set
       group: null,
+      componentClaim: componentClaimByNodeId.get(node.id) || null,
+      // Phase 3 — geometric (inferred, not declared) recognition facts, see
+      // this function's own comment above on why these default to empty
+      // rather than being auto-computed.
+      geometryHints: (geometryDetected.recognitionHintsByNode || {})[node.id] || [],
+      cardFact: cardFactByNodeId.get(node.id) || null,
+      cardGridFact: cardGridFactByNodeId.get(node.id) || null,
+      bannerFact: bannerFactByNodeId.get(node.id) || null,
+      dividerFact: dividerFactByNodeId.get(node.id) || null,
+      rowSetFact: rowSetFactByNodeId.get(node.id) || null,
     });
   }
 
@@ -209,6 +293,11 @@ function buildDesignSkeleton(graph, opts = {}) {
     g.members.forEach((m, slotIndex) => {
       const entry = entryByNodeId.get(m.nodeId);
       if (!entry) return;
+      // A component-claimed node (Phase 2.5) keeps that identity — never
+      // also assigned freeform repeating-group membership by this
+      // Skeleton's own geometric clustering. See this function's own
+      // comment on componentClaimByNodeId for the precedence rule.
+      if (entry.componentClaim) return;
       entry.group = {
         groupId: g.groupId,
         kind: GROUP_KIND_REPEATING,
@@ -229,6 +318,15 @@ function buildDesignSkeleton(graph, opts = {}) {
     graphId: graph.graphId || null,
     nodes,
     freeformGroups: freeform.groups,
+    // Phase 3 — raw candidate/fact arrays, mirroring freeformGroups above;
+    // {} when the caller didn't supply geometryDetected/componentDetected
+    // (see this function's own comment on why those default to empty).
+    geometryCandidates: geometryDetected.candidates || [],
+    cardFacts: componentGeometryDetected.cardFacts || [],
+    cardGridFacts: componentGeometryDetected.cardGridFacts || [],
+    bannerFacts: componentGeometryDetected.bannerFacts || [],
+    dividerFacts: componentGeometryDetected.dividerFacts || [],
+    rowSetFacts: componentGeometryDetected.rowSetFacts || [],
   };
 }
 

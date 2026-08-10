@@ -1,0 +1,66 @@
+{
+  "packId": "component.detect",
+  "version": "1.0.0",
+  "suiteVersion": "1.0.0",
+  "description": "Phase 12 — component instance/reuse proposers (never commit Decisions)",
+  "priority": 50,
+  "allowedPolicies": ["*"],
+  "knowledgeRefs": [],
+  "dependencies": [],
+  "rules": [
+    {
+      "ruleId": "component.detect.treatment",
+      "question": "component.instanceTreatment",
+      "matcherRef": "component.instance",
+      "priorityBand": "P3",
+      "description": "Propose keep vs flatten for component instances"
+    },
+    {
+      "ruleId": "component.detect.reuse",
+      "question": "component.reuse",
+      "matcherRef": "component.signal",
+      "priorityBand": "P4",
+      "description": "Propose emit-reuse hint candidates (hints only)"
+    },
+    {
+      "ruleId": "component.detect.cardBannerDivider",
+      "question": "component.cardPattern",
+      "matcherRef": "component.card-shape",
+      "priorityBand": "P3",
+      "description": "Phase 2 — propose card/banner/divider shape recognition from box geometry + paint (docs/COMPILER_MIGRATION_BLUEPRINT.md Phase 2)"
+    }
+  ],
+  "plugin": {
+    "id": "rulepack.component.detect",
+    "version": "1.0.0",
+    "engineType": "proposer",
+    "phaseAffinity": "mid",
+    "determinism": "pure",
+    "reads": ["Fact", "Evidence"],
+    "writes": ["Hypothesis", "Evidence"],
+    "creates": ["Hypothesis", "Evidence"],
+    "destroys": [],
+    "consumes": ["Fact"],
+    "produces": ["Hypothesis", "Evidence", "Candidate"],
+    "requiredFacts": ["ndg.graph"],
+    "optionalFacts": ["ndg.node", "layout.ir", "component.ir"],
+    "emittedIR": [],
+    "acceptedQuestions": [
+      "component.instanceTreatment",
+      "component.reuse",
+      "component.variant",
+      "component.cardPattern",
+      "component.bannerPattern"
+    ],
+    "allowedPolicies": ["*"],
+    "requiredCapabilities": [],
+    "incompatiblePlugins": [],
+    "estimatedCost": 4,
+    "estimatedMemory": 2048,
+    "timeout": 15000,
+    "retries": 0,
+    "crashIsolation": "try_catch",
+    "rollbackSupport": "workspace_tx",
+    "contractSuiteVersion": "1.0.0"
+  }
+}

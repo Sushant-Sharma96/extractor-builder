@@ -1,0 +1,18 @@
+{
+  "contractId": "EmitPlan",
+  "suiteVersion": "1.0.0",
+  "planId": "emit-1",
+  "resolvedId": "resolved-1",
+  "policyProfileId": "semantic-lean",
+  "tagChoices": [
+    {
+      "nodeId": "src:1:2",
+      "tag": "section",
+      "decisionId": "dec-html-tag-winner-1"
+    }
+  ],
+  "roleChoices": [],
+  "classStrategy": { "mode": "slug-from-name" },
+  "jsModules": [],
+  "assetEmbedRefs": []
+}

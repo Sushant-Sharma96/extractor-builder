@@ -1,0 +1,53 @@
+{
+  "packId": "responsive.detect",
+  "version": "1.0.0",
+  "suiteVersion": "1.0.0",
+  "description": "Phase 15 — responsive strategy proposers (never commit Decisions)",
+  "priority": 48,
+  "allowedPolicies": ["*"],
+  "knowledgeRefs": [],
+  "dependencies": [],
+  "rules": [
+    {
+      "ruleId": "responsive.detect.strategy",
+      "question": "responsive.strategy",
+      "matcherRef": "responsive.ambiguous",
+      "priorityBand": "P2",
+      "description": "Propose stack/wrap/row adaptations under ambiguity"
+    },
+    {
+      "ruleId": "responsive.detect.breakpoint",
+      "question": "responsive.breakpoint",
+      "matcherRef": "responsive.breakpoint",
+      "priorityBand": "P3",
+      "description": "Propose honor/abstain for default breakpoint candidates"
+    }
+  ],
+  "plugin": {
+    "id": "rulepack.responsive.detect",
+    "version": "1.0.0",
+    "engineType": "proposer",
+    "phaseAffinity": "mid",
+    "determinism": "pure",
+    "reads": ["Fact", "Evidence"],
+    "writes": ["Hypothesis", "Evidence"],
+    "creates": ["Hypothesis", "Evidence"],
+    "destroys": [],
+    "consumes": ["Fact"],
+    "produces": ["Hypothesis", "Evidence", "Candidate"],
+    "requiredFacts": ["ndg.graph"],
+    "optionalFacts": ["ndg.node", "responsive.ir", "layout.ir"],
+    "emittedIR": [],
+    "acceptedQuestions": ["responsive.strategy", "responsive.breakpoint"],
+    "allowedPolicies": ["*"],
+    "requiredCapabilities": [],
+    "incompatiblePlugins": [],
+    "estimatedCost": 5,
+    "estimatedMemory": 2048,
+    "timeout": 15000,
+    "retries": 0,
+    "crashIsolation": "try_catch",
+    "rollbackSupport": "workspace_tx",
+    "contractSuiteVersion": "1.0.0"
+  }
+}

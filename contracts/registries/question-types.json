@@ -1,0 +1,50 @@
+{
+  "registryId": "question-type-registry",
+  "suiteVersion": "1.0.0",
+  "description": "Initial extensible question ids. Not a closed world.",
+  "extensionPolicy": {
+    "pattern": "<namespace>.<name>",
+    "allowedNamespaces": [
+      "layout",
+      "semantic",
+      "html",
+      "a11y",
+      "responsive",
+      "component",
+      "token",
+      "asset",
+      "behavior",
+      "motion",
+      "theme",
+      "i18n",
+      "recognition"
+    ],
+    "addingQuestions": "Later phases may add question ids under an allowed namespace without MAJOR bump (MINOR). New namespaces require MINOR documentation update to this registry. Renaming/removing registered ids is MAJOR."
+  },
+  "questions": [
+    { "id": "layout.mode", "namespace": "layout", "description": "Flow vs absolute vs other layout mode interpretation." },
+    { "id": "layout.sizing", "namespace": "layout", "description": "Sizing interpretation on an axis." },
+    { "id": "layout.overflow", "namespace": "layout", "description": "Overflow interpretation (clip / scroll / visible) — arrangement only." },
+    { "id": "layout.stacking", "namespace": "layout", "description": "Stacking / overlay participation interpretation." },
+    { "id": "layout.childParticipation", "namespace": "layout", "description": "Whether a child is in-flow vs out-of-flow for its parent." },
+    { "id": "layout.constraint.relax", "namespace": "layout", "description": "Which soft layout constraint to relax under conflict (interpretive; Decision Runtime commits)." },
+    { "id": "semantic.role", "namespace": "semantic", "description": "Semantic role / landmark interpretation." },
+    { "id": "semantic.region", "namespace": "semantic", "description": "Region / pattern region interpretation." },
+    { "id": "html.tag", "namespace": "html", "description": "HTML tag choice." },
+    { "id": "a11y.name", "namespace": "a11y", "description": "Accessible name." },
+    { "id": "a11y.role", "namespace": "a11y", "description": "ARIA / implicit role." },
+    { "id": "responsive.strategy", "namespace": "responsive", "description": "Responsive binding strategy." },
+    { "id": "responsive.breakpoint", "namespace": "responsive", "description": "Whether to honor, merge, or abstain on a breakpoint candidate (interpretive; Decision Runtime commits)." },
+    { "id": "behavior.authorize_js", "namespace": "behavior", "description": "Whether JS module emission is authorized." },
+    { "id": "asset.degrade", "namespace": "asset", "description": "Asset fallback / degrade choice." },
+    { "id": "recognition.features", "namespace": "recognition", "description": "Deterministic structural feature bag extracted from a design node (not a UI component decision)." },
+    { "id": "recognition.blockKind", "namespace": "recognition", "description": "Low-level probabilistic block-like recognition candidates (button-like, card-like, …). Not Hero/Navbar/page understanding." },
+    { "id": "component.instanceTreatment", "namespace": "component", "description": "Keep instance vs flatten into plain tree (interpretive; Decision Runtime commits)." },
+    { "id": "component.reuse", "namespace": "component", "description": "Whether to emit a reuse hint for a component definition (hint only; never forced emit)." },
+    { "id": "component.variant", "namespace": "component", "description": "Optional variant property interpretation for a component definition/instance." },
+    { "id": "component.cardPattern", "namespace": "component", "description": "Phase 2 (docs/COMPILER_MIGRATION_BLUEPRINT.md) — whether a recognized card shape (chrome+content or frame-owns-fill) should be treated as a card pattern (interpretive; Decision Runtime commits)." },
+    { "id": "component.bannerPattern", "namespace": "component", "description": "Phase 2 (docs/COMPILER_MIGRATION_BLUEPRINT.md) — whether a recognized banner shape (wide dark chrome strip + text content) should be treated as a banner pattern (interpretive; Decision Runtime commits)." },
+    { "id": "token.bind", "namespace": "token", "description": "Bind a node property to a design token (or abstain / keep literal)." },
+    { "id": "token.merge", "namespace": "token", "description": "Whether two token candidates should merge (interpretive; avoid false merges)." }
+  ]
+}

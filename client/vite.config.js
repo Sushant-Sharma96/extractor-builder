@@ -8,7 +8,10 @@ export default defineConfig({
   server: {
     port: 5173,
     proxy: {
+      // API + generated site previews both live on the Express server (3001).
+      // Without /preview, the iframe loads Vite's SPA index → stripmine UI again.
       '/api': 'http://localhost:3001',
+      '/preview': 'http://localhost:3001',
     },
   },
   build: {

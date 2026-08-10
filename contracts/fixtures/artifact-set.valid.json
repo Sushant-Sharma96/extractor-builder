@@ -1,0 +1,11 @@
+{
+  "contractId": "ArtifactSet",
+  "suiteVersion": "1.0.0",
+  "artifactSetId": "artifacts-1",
+  "emitPlanId": "emit-1",
+  "artifacts": [
+    { "kind": "html", "id": "index.html", "mediaType": "text/html", "pathHint": "index.html" },
+    { "kind": "css", "id": "styles.css", "mediaType": "text/css", "pathHint": "styles.css" },
+    { "kind": "js", "id": "script.js", "mediaType": "text/javascript", "pathHint": "script.js" }
+  ]
+}

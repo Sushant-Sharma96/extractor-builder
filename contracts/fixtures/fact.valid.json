@@ -1,0 +1,9 @@
+{
+  "contractId": "Fact",
+  "suiteVersion": "1.0.0",
+  "factId": "fact-layoutmode-1",
+  "kind": "source.layoutMode",
+  "subject": "src:1:2",
+  "assertion": { "layoutMode": "HORIZONTAL" },
+  "producer": { "engineId": "normalization" }
+}

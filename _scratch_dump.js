@@ -1,0 +1,14 @@
+'use strict';
+require('dotenv').config();
+const path = require('path');
+const fs = require('fs');
+const figmaBuild = require('./server/figma-build');
+const cacheDir = path.join(__dirname, 'output', 'figma-cache', 'c0kt3mp76RoEiq3CFoeCHa__1_848');
+const doc = JSON.parse(fs.readFileSync(path.join(cacheDir, 'document.json'), 'utf8'));
+const document = doc.document || doc;
+const analyzed = figmaBuild.analyze(document, { emitMode: 'auto' });
+const emitted = figmaBuild.emit(analyzed.tree, { title: 'Articles' });
+fs.writeFileSync('_legacy-articles.html', emitted.html);
+fs.writeFileSync('_legacy-articles.css', emitted.css);
+console.log('HTML lines', emitted.html.split('\n').length);
+console.log('CSS lines', emitted.css.split('\n').length);

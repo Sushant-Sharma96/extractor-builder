@@ -1,0 +1,62 @@
+'use strict';
+
+const { FACT_KIND_GEOMETRY_SLICE, BUILDER_VERSION, PLUGIN_ID } = require('./constants');
+const { buildGeometryReport } = require('./report');
+const { GeometryError, GeometryErrorKind } = require('./errors');
+
+function publishGeometryIR(ctx, projected, opts = {}) {
+  if (!ctx || typeof ctx.putIrSlice !== 'function') {
+    throw new GeometryError(GeometryErrorKind.PUBLISH, 'plugin context required');
+  }
+  const { slice, checksum, detected } = projected;
+  const suiteVersion = slice.suiteVersion || '1.0.0';
+
+  ctx.putIrSlice({
+    suiteVersion,
+    stageId: slice.stageId,
+    sliceId: slice.sliceId,
+    nodeIds: slice.nodeIds,
+    graphId: slice.graphId,
+    checksum,
+    builderVersion: BUILDER_VERSION,
+    payload: slice.payload,
+  });
+
+  const report = buildGeometryReport({
+    graphId: slice.graphId,
+    checksum,
+    detected,
+    slice,
+    timing: opts.timing || null,
+    fingerprint: opts.fingerprint || null,
+  });
+
+  ctx.putFact({
+    contractId: 'Fact',
+    suiteVersion,
+    factId: `fact:geometry.ir:${slice.graphId}`,
+    kind: FACT_KIND_GEOMETRY_SLICE,
+    subject: slice.graphId,
+    assertion: {
+      graphId: slice.graphId,
+      sliceId: slice.sliceId,
+      checksum,
+      builderVersion: BUILDER_VERSION,
+      candidateCount: slice.payload.candidates.length,
+      metrics: slice.payload.metrics,
+      report,
+      payload: slice.payload,
+      structuralTruth: false,
+      interpretiveProjection: true,
+    },
+    producer: {
+      engineId: PLUGIN_ID,
+      packId: null,
+      ruleId: null,
+    },
+  });
+
+  return { sliceId: slice.sliceId, report, checksum };
+}
+
+module.exports = { publishGeometryIR };

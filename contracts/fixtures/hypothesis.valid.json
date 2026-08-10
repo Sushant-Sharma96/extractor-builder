@@ -1,0 +1,19 @@
+{
+  "contractId": "Hypothesis",
+  "suiteVersion": "1.0.0",
+  "hypothesisId": "hyp-html-tag-1",
+  "question": "html.tag",
+  "subject": "src:1:2",
+  "candidates": [
+    { "candidateId": "cand-section", "answer": { "tag": "section" }, "localScore": 0.62 },
+    { "candidateId": "cand-div", "answer": { "tag": "div" }, "localScore": 0.55 }
+  ],
+  "evidence": [
+    { "evidenceId": "ev-1", "kind": "feature", "ref": "rootChildRegion" }
+  ],
+  "producer": { "engineId": "semantic", "packId": "pack.semantic.html" },
+  "localScores": [
+    { "candidateId": "cand-section", "value": 0.62 },
+    { "candidateId": "cand-div", "value": 0.55 }
+  ]
+}

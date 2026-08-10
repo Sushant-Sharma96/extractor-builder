@@ -76,6 +76,14 @@ function workingNodeFromRaw(raw, pathHint) {
       strokeJoin: raw.strokeJoin || null,
       strokeDashes: Array.isArray(raw.strokeDashes) ? raw.strokeDashes : null,
       rotation: raw.rotation != null ? raw.rotation : null,
+      // The full 2x3 affine matrix ([[a,b,c],[d,e,f]]) — the only Figma
+      // source for skew/non-uniform scale (Research Part 5/Section 6.6:
+      // "not ingested at all"). `rotation` above only ever carries a pure
+      // rotation angle; a node that's ALSO skewed or non-uniformly scaled
+      // needs this matrix, not a substitute for it. Zero confirmed real
+      // occurrences in this project's own corpus to date (captured for
+      // completeness/the next 1,000 files, not a currently-observed bug).
+      relativeTransform: Array.isArray(raw.relativeTransform) ? raw.relativeTransform : null,
       // Real, present on every node in every fixture (Figma does not omit it
       // even at its default) — previously never captured under any name.
       blendMode: raw.blendMode || null,

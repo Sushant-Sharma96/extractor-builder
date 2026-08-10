@@ -150,6 +150,10 @@ function interpretNode(node, ctx = {}) {
     // Phase 1). Scored below the Phase 0 binary uniform-gap row/column hints (0.6)
     // since these fire only when that stricter check found nothing for the node.
     if (h === 'geometry-side-by-side') bump('flow-row', 0.55, 'recognition:geometry-side-by-side');
+    // Direct symmetric counterpart of geometry-side-by-side above (see
+    // compiler/geometry/rules/vocabulary.js's evaluateSideBySideColumn) —
+    // same confidence tier, same reasoning, opposite axis.
+    if (h === 'geometry-side-by-side-column') bump('flow-column', 0.55, 'recognition:geometry-side-by-side-column');
     if (h === 'geometry-column-flex') bump('flow-row', 0.5, 'recognition:geometry-column-flex');
   }
 

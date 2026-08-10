@@ -1,0 +1,101 @@
+{
+  "$schema": "https://json-schema.org/draft-07/schema#",
+  "contractId": "CompileJobFingerprint",
+  "suiteVersion": "1.0.0",
+  "title": "CompileJobFingerprint",
+  "description": "Named determinism inputs (RFC-002 §2.4). Synced with compiler/kernel/fingerprint.js as of Foundation Freeze v1 / Phase 11b.1. No undocumented fields.",
+  "type": "object",
+  "required": [
+    "contractId",
+    "suiteVersion",
+    "contractSuiteVersion",
+    "policyProfileId"
+  ],
+  "properties": {
+    "contractId": { "const": "CompileJobFingerprint" },
+    "suiteVersion": { "type": "string" },
+    "contractSuiteVersion": { "type": "string", "minLength": 1 },
+    "policyProfileId": { "type": "string", "minLength": 1 },
+    "policyProfileVersion": { "type": ["string", "null"] },
+    "knowledgeBundleId": { "type": ["string", "null"] },
+    "knowledgeBundleVersion": { "type": ["string", "null"] },
+    "knowledgeChecksum": { "type": ["string", "null"] },
+    "ruleSetVersion": { "type": ["string", "null"] },
+    "rulePacks": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["packId", "version"],
+        "properties": {
+          "packId": { "type": "string", "minLength": 1 },
+          "version": { "type": "string", "minLength": 1 }
+        },
+        "additionalProperties": false
+      }
+    },
+    "seed": { "type": ["string", "null"] },
+    "plugins": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "version"],
+        "properties": {
+          "id": { "type": "string", "minLength": 1 },
+          "version": { "type": "string", "minLength": 1 }
+        },
+        "additionalProperties": false
+      }
+    },
+    "ndgChecksum": { "type": ["string", "null"] },
+    "ndgBuilderVersion": { "type": ["string", "null"] },
+    "ndgGraphId": { "type": ["string", "null"] },
+    "layoutIrChecksum": { "type": ["string", "null"] },
+    "layoutBuilderVersion": { "type": ["string", "null"] },
+    "layoutSliceId": {
+      "type": ["string", "null"],
+      "description": "Baseline LayoutIR₀ slice id (same as baselineLayoutIrSliceId when set)."
+    },
+    "baselineLayoutIrSliceId": {
+      "type": ["string", "null"],
+      "description": "Explicit LayoutIR₀ pin (Phase 11b.1)."
+    },
+    "activeLayoutIrSliceId": {
+      "type": ["string", "null"],
+      "description": "Active LayoutIR pin — LayoutIR₁ when solved, else LayoutIR₀ (Phase 11b.1)."
+    },
+    "constraintSolverVersion": { "type": ["string", "null"] },
+    "solvedLayoutIrChecksum": { "type": ["string", "null"] },
+    "solvedLayoutSliceId": {
+      "type": ["string", "null"],
+      "description": "LayoutIR₁ slice id when present."
+    },
+    "solverFingerprint": { "type": ["string", "null"] },
+    "componentIrChecksum": { "type": ["string", "null"] },
+    "componentBuilderVersion": { "type": ["string", "null"] },
+    "componentSliceId": { "type": ["string", "null"] },
+    "tokenIrChecksum": { "type": ["string", "null"] },
+    "tokenBuilderVersion": { "type": ["string", "null"] },
+    "tokenSliceId": { "type": ["string", "null"] },
+    "semanticIrChecksum": { "type": ["string", "null"] },
+    "semanticBuilderVersion": { "type": ["string", "null"] },
+    "semanticSliceId": { "type": ["string", "null"] },
+    "responsiveIrChecksum": { "type": ["string", "null"] },
+    "responsiveBuilderVersion": { "type": ["string", "null"] },
+    "responsiveSliceId": { "type": ["string", "null"] },
+    "accessibilityIrChecksum": { "type": ["string", "null"] },
+    "accessibilityBuilderVersion": { "type": ["string", "null"] },
+    "accessibilitySliceId": { "type": ["string", "null"] },
+    "resolvedIrChecksum": { "type": ["string", "null"] },
+    "resolvedBuilderVersion": { "type": ["string", "null"] },
+    "resolvedSliceId": { "type": ["string", "null"] },
+    "emitPlanChecksum": { "type": ["string", "null"] },
+    "emitBuilderVersion": { "type": ["string", "null"] },
+    "emitPlanSliceId": { "type": ["string", "null"] },
+    "extra": {
+      "type": "object",
+      "additionalProperties": true,
+      "description": "Escape hatch only; prefer named fields. Must not hide required determinism inputs."
+    }
+  },
+  "additionalProperties": false
+}

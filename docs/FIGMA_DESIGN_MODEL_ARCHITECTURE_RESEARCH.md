@@ -5,7 +5,7 @@
 | **Date** | 2026-07-29 |
 | **Scope** | Research only — no implementation, no bug fixes, no code changes |
 | **Trigger** | Repeated pattern across many sessions: fixing one visual bug (spacing, images, borders, text alignment, wrappers, decorative rectangles, overlays, clipping, row layouts, absolute positioning) surfaces another, on a different design, in the same category. This document investigates whether that pattern is symptomatic of an architectural gap rather than a string of unrelated bugs. |
-| **Status** | COMPLETE — all 7 parts finished. Every factual claim is either sourced from Figma's official public schema or independently verified against this codebase's own source and cached real fixtures (direct grep/read citations throughout, not estimates). Awaiting user review before any implementation begins. |
+| **Status** | Parts 1–7 COMPLETE (2026-07-29). Parts 8–12 added 2026-07-31 in response to an explicit "stop patching, research the architecture" instruction after an 8th consecutive new-file regression (see Part 12.0). Same rule as before: every claim is either sourced from Figma's public schema or independently verified against this codebase's own source/fixtures — no estimates presented as fact. |
 
 ---
 
@@ -446,3 +446,346 @@ This project's own document history (Precedent section) shows six consecutive "i
 - **Phase E — Deliberately expand the fixture corpus** to include a component/instance-based file, a Plugin-API-sourced file, and at least one file exercising `SECTION`/`TABLE`/`BOOLEAN_OPERATION` — Part 6 identified all of these as structurally under-tested, not just currently-imperfect.
 
 Each phase should be gated on the previous phase's fixture-test proof, not a written status update — directly to avoid extending the six-mechanism pattern documented in this research to a seventh.
+
+---
+
+## PART 8 — CSS Capability Matrix
+
+Parts 1–7 answer "what does Figma's model contain that we drop." This part answers a different, complementary question: **of everything CSS itself can express, how much of it could this pipeline ever reach, and how much does it actually deliver today** — scored per major CSS category, as requested. Two numbers per row, not one, because conflating them hides which kind of gap you're looking at:
+
+- **Figma Ceiling** — of everything real-world designs need in this category, what fraction does Figma's own data model expose *at all* (regardless of whether this compiler reads it)? This is a hard ceiling no Figma-based compiler can exceed.
+- **Current** — of that ceiling, what fraction does this compiler's full pipeline (ingest → interpret → render → CSS) actually deliver correctly today, as of the fixes made through 2026-07-31.
+
+| Category | Figma Ceiling | Current | Why |
+|---|---|---|---|
+| Layout (position/box model/overflow) | ~95% | ~85% | Absolute x/y/w/h, clipping, and (per Part 9 below) real Auto Layout sizing intent are all present in Figma's data; the sizing-intent piece is computed correctly at interpretation time but never reaches the renderer (Part 9.1) — the single biggest deduction in this row. |
+| Flexbox (Auto Layout HORIZONTAL/VERTICAL) | ~90% | ~40% | `layoutMode`/`itemSpacing`/padding ship correctly. `primaryAxisAlignItems`/`counterAxisAlignItems` are ingested and then ignored — `justify-content` is never emitted anywhere in this codebase, and `align-items` is a hardcoded constant (`center` for rows, `flex-start` for columns) regardless of what Figma says (confirmed by direct grep, zero hits for `justify-content` in `css-declarations.js`). `layoutSizingHorizontal/Vertical` (fill/hug/fixed) is the Part 9.1 gap. `layoutGrow`/`layoutWrap` are ingested, never read anywhere outside tests. |
+| Grid (native `layoutMode:'GRID'`) | ~70% | ~65% | Shipped this session (task history #38): track strings, gaps, per-cell placement all read and emitted. Figma's own Grid mode has no subgrid/named-lines concept to lose, so the ceiling is naturally lower than CSS Grid's full surface — the gap here is mostly the still-parallel geometry-guessed `grid-track` fallback for undeclared cases, not missing native-mode support. |
+| Typography | ~85% | ~65% | Font family/size/weight/spacing/line-height/case/align/decoration/per-run overrides all ship. `textAlignVertical` is ingested and consumed only by the Phase 9 feature-extraction stage, never turned into real alignment CSS. List/paragraph spacing (`listSpacing`, `lineTypes`) and decoration color/style/thickness aren't ingested at all. The `textNoWrap` heuristic (fixed 2026-07-31) is now more correct but is still a heuristic, not a read of Figma's actual line-count. |
+| Backgrounds | ~75% | ~45% | Solid + linear/angular gradient fills ship (including gradient TEXT fills, fixed 2026-07-31). Radial/diamond gradients and multiple stacked fills on one node are real, common Figma patterns with zero code path — `paintCss()`/`solidFillCss()` both hard-require exactly one fill entry. |
+| Borders | ~80% | ~60% | Uniform + per-side stroke weight, CENTER/OUTSIDE-via-outline, and dash-style all ship. Per-corner mixed radii (`rectangleCornerRadii`) and `cornerSmoothing` are ingested, consulted only for structural collapse-protection (Part 5's "node fate" row), never turned into visual CSS. |
+| Effects (shadow/opacity/blend) | ~85% | ~65% | Node opacity and blend mode ship. `DROP_SHADOW`/`INNER_SHADOW` → `box-shadow` shipped 2026-07-31 (this session). `LAYER_BLUR`/`BACKGROUND_BLUR` → `filter:blur()`/`backdrop-filter` is fully achievable in CSS but has zero code path — explicitly out of scope until now, not architecturally blocked. |
+| Transforms | ~55% | ~25% | Figma's `relativeTransform` can express rotation, skew, and non-uniform scale on any node. Only the safe case (180°, non-GROUP) is extracted; arbitrary rotation is explicitly gated off (unresolved width/height-swap basis conflict, Part 5), skew/non-uniform-scale are never read at all. |
+| Masks / Clipping | ~50% | ~20% | `clipsContent` → `overflow:hidden` ships (fixed earlier this session). `isMask`/`maskType` are ingested and consumed ONLY to protect a mask shape from accidental structural collapse — zero code path turns an actual mask relationship into `mask-image`/`clip-path`. A real vector mask today just renders as an ordinary opaque sibling. |
+| SVG (VECTOR/BOOLEAN_OPERATION) | ~70% | ~45% | Single-vector-icon reconstruction survives NDG collapse (fixed earlier this session, the SVG-collapse ID-mismatch bug). `BOOLEAN_OPERATION` nodes have zero code path anywhere in the compiler (confirmed, Part 6.1) — a union/subtract/exclude shape falls through to generic-group handling and loses its composed geometry entirely. |
+| Animation | ~5% | 0% | Static Figma frames carry no keyframe/transition data by definition — Smart Animate/prototyping "reactions" live in a completely separate API surface this pipeline never reads (confirmed: zero matches for `reaction`/`prototype` anywhere in `compiler/`). The 5% ceiling is generous — it assumes a future version of this pipeline deliberately ingested the separate prototype data, which nothing today attempts. |
+| Interaction (`:hover`/`:focus`/cursor/pointer-events) | ~15% | 0% | Figma component variants can encode a hover/pressed/focus STATE as a sibling variant frame — `componentProperties`/`variantProperties` ARE ingested (Part 5) — but nothing downstream diffs sibling variants to synthesize a real `:hover` rule; only variant KEY NAMES are read, for component identity, never for interaction-state CSS. |
+| Media (images/object-fit/aspect-ratio) | ~50% | ~40% | Image fills with `scaleMode` ship (`object-fit`, fixed 2026-07-31). `imageTransform`/`STRETCH` matrices (7 confirmed real occurrences, Part 5) are unread. No video-fill support (unconfirmed whether any exists in real Figma files at all). `aspect-ratio` as a CSS idiom is never emitted — this pipeline always falls back to hard pixel width/height instead (see Part 9). |
+| Modern CSS (custom properties / `:has()` / container queries / subgrid) | ~10% | ~5% | Figma variables (`boundVariables`) are a real, ingested concept (Phase 13 token detection) that maps conceptually to CSS custom properties — but detection never reaches emitted CSS as a real `--token-name:` declaration (confirmed: grepping `compiler/emit/` for `--[a-zA-Z-]+:` finds only 3 hardcoded INTERNAL layout-mechanism variables, none design-token-derived). Container queries/`:has()`/subgrid have no Figma-side concept to ingest in the first place — this is a hard ceiling, not a missed read. |
+| Responsive (breakpoints/fluid sizing) | ~40% | ~20% | A real breakpoint/strategy IR exists (stack/row/wrap/shrink/hide/show/space-tighten/fixed) and DOES reach literal `@media` CSS end-to-end (Phase 4, confirmed wired) — more complete than most categories above. The deduction is Part 9's finding: every node's baseline (non-media-query) width/min-width is still a hard captured pixel number with no fluid relationship to its parent, so the `@media` overrides are patching a foundation that itself doesn't scale between the breakpoints they define. |
+
+**Overall, unweighted average: Figma Ceiling ~58%, Current ~40%** — meaning the compiler is currently reaching roughly 70% of what's even theoretically reachable from Figma's own data. The categories with the largest (ceiling − current) gap — Flexbox, Backgrounds, Masks, Modern CSS, Responsive — are, not coincidentally, the ones Part 9 and Part 11 below identify as consequences of one or two shared root mechanisms rather than dozens of unrelated missing features.
+
+---
+
+## PART 9 — Absolute Positioning Audit
+
+Every site in the ACTIVE renderer (`compiler/artifacts/ir-experimental-renderer.js` + `compiler/emit/render/css-declarations.js` — the renderer this whole session, and every session in the Precedent table, has actually been debugging) that emits `position:absolute`, a hard `left`/`top`, or a hard/min `width`/`height`. Legacy path (`server/figma-generate.js`/`figma-build.js`) audited separately once the parallel research pass returns (9.5).
+
+### 9.0 — The headline finding: the fix already exists, and is never called
+
+`compiler/layout/interpret.js`'s `sizingAxis()` was fixed earlier in this project specifically because it was reading the wrong field (Part 4.2.1's "smoking gun": it checked `constraints.horizontal/vertical`, which structurally can never hold `FILL`/`HUG`/`FIXED`, instead of `layoutSizingHorizontal`/`layoutSizingVertical`, which does). That fix is correct and shipped — `interpretNode()` (interpret.js:206-209) now computes, for every node, a genuinely accurate `sizing: { horizontal: 'fill'|'hug'|'fixed'|'unknown', vertical: ... }` straight from Figma's own explicit intent.
+
+**That value is never read.** `ir-experimental-renderer.js:717` does `const interp = interpByNodeId.get(node.id)`, and this exact `interp` object has its `.padding` (line 843) and `.gap` (line 842) fields read two lines apart — but `.sizing` is not referenced anywhere in the file (confirmed: zero matches for `.sizing`, `sizing.horizontal`, `sizing.vertical`, `interp.sizing` in `ir-experimental-renderer.js`). The fix for "this compiler doesn't know a Figma node is supposed to be responsive (FILL) vs. content-sized (HUG) vs. intentionally fixed (FIXED)" was made in the interpretation stage and then silently orphaned one stage before it could matter. This is the single most consequential finding in this document: **the data needed to stop emitting hard pixel widths already exists, correctly computed, in every render pass that has run since the `sizingAxis()` fix shipped — it has simply never been wired to the code that writes CSS.**
+
+This single wiring gap is the direct, provable root cause of both of today's reported bugs:
+- **The hero-row overflow** (`section-section-light`, node 43:3): the row's own `layoutSizingHorizontal` is almost certainly `FILL` (it was captured filling exactly the 1192px content width of a 1440px canvas) — had the renderer read `interp.sizing.horizontal === 'fill'` it would emit `width:100%`/`flex:1` instead of `min-width:1192px`, and the row would shrink fluidly with `.et-page` instead of overflowing it the moment the viewport is narrower than the original design canvas.
+- **The `Group 357` misalignment** (`.group-272`): rendered `position:absolute; left:139px; top:97px; width:1646px` — a hard pixel box with no relationship to its parent's actual rendered width. Whatever this node's real `layoutSizingHorizontal`/`layoutAlign` says, it is not consulted; the box is reproduced as a literal, non-fluid copy of one specific canvas measurement.
+
+### 9.1 — Site-by-site audit: `position:absolute` / hard `left`,`top`
+
+| Site | Condition | Purpose (per its own comment) | Verdict |
+|---|---|---|---|
+| `ir-experimental-renderer.js:1087-1095` | `mode === 'absolute'` (real trigger: `layoutPositioning:ABSOLUTE`, confirmed **never observed populated in this project's 15-fixture corpus**, Part 5) **OR** `!parentHasAutoLayout` (parent is a plain GROUP/FRAME with no declared Figma Auto Layout at all) | Place a node at its exact Figma-captured offset relative to its parent | The `layoutPositioning:ABSOLUTE` branch is correct and should remain — it is Figma's own explicit "this child opts out of the flow" signal. The `!parentHasAutoLayout` branch is the real, common case: a genuinely freeform (no Auto Layout anywhere) canvas has no other signal to lay out from at all — position:absolute (or geometry-guessed flex/grid, per `compiler/geometry/*`, which already runs FIRST and only falls through to this branch when it finds nothing) is a legitimate last resort here, not an architectural default. **Should remain, but only as the residual fallback after the Skeleton/geometry recognizers have had a chance to run — which today's flow already mostly respects** (`compiler/geometry/*` executes upstream of this gate). |
+| `ir-experimental-renderer.js:1096-1131` (the `else if (parentHasAutoLayout ...)` branch) | Parent HAS declared Figma Auto Layout, so no `left`/`top` is emitted (correct — the parent's own `display:flex`/`grid` places this child) | Preserve the child's captured `width`/`height` as a sizing hint | **This is not a position:absolute site at all** — it correctly avoids one. But per 9.0, it unconditionally sets `layoutChoice.width = effectiveBox.width` (a hard captured pixel number) regardless of whether Figma's own `layoutSizingHorizontal` says `FILL` (should be `width:100%`/`flex:1`), `HUG` (should be `width:auto`), or `FIXED` (the only case where a hard/min pixel value is actually correct). **This is the exact site that needs `interp.sizing` wired in — see 9.0.** |
+| `ir-experimental-renderer.js:1140-1142` (`isFlowSafeFreeformMember`) | A freeform-layout-ir group member, real flex child of its now-flex-container parent | Same "captured width/height as a sizing floor" pattern, explicitly `min-`, never hard, "never clip real content" | Same verdict as above: architecturally correct to avoid a hard clip, but the floor value itself is a raw pixel number with no fluid relationship to its container — would benefit from the same `interp.sizing` read (though this path is a compiler-INFERRED group, so there is no per-member Figma `layoutSizingHorizontal` to read; the closest available signal is the GROUP's own axis + whether members visually fill their row, which `compiler/freeform-layout/detect.js` already computes for other purposes). |
+| `ir-experimental-renderer.js:1312, 1329` | Parent resolved `flow-row`/`flow-column`/`grid-track` AND at least one rendered child is itself `position:absolute` | Give the PARENT a real `width`/`height` floor so an absolutely-positioned child (which contributes zero intrinsic size to its container) doesn't collapse the container to `0×0` | Legitimate compensating mechanism for a real CSS fact (absolutely positioned elements are removed from normal flow's size calculation) — **should remain as-is**, it is not itself a source of non-responsiveness, it is a safety net for wherever position:absolute IS legitimately used elsewhere. |
+| `css-declarations.js:583-588` | `mode` is `flow-row`/`flow-column`/`grid-track` **OR** `isFlowSafeMember` **OR** `isRealAutoLayoutFlowChild`, and `layoutChoice.width` is finite | Emit `min-width:<width>px` | This is where every one of the above `layoutChoice.width` assignments actually becomes CSS. **This is the single emission point where reading `interp.sizing.horizontal` would fix the largest number of real-world cases** — a one-branch change (`fill` → `width:100%` or `flex:1 1 0` instead of `min-width`; `hug` → no width declaration at all, let content size it; `fixed`/`unknown` → today's existing `min-width` behavior, unchanged) would require no new IR and no architecture change, only reading a value that is already sitting in scope. |
+
+### 9.2 — Direct trace: does this explain `Group 357`?
+
+The DevTools evidence you captured shows `.group-272 { position: absolute; left: 139px; top: 97px; width: 1646px; min-height: 712px; }`, wrapping 2 flex sub-groups and 2 raw `<img>` siblings. Two independent things are visible in that one rule, matching two different rows in 9.1:
+
+1. `position:absolute` at `left:139px;top:97px` — per 9.1's first row, this node's parent has no declared Auto Layout (`!parentHasAutoLayout`), so it fell to the freeform/last-resort branch. Whether that's the CORRECT outcome depends on whether the real Figma file actually leaves this parent as a plain GROUP (in which case absolute placement is defensible) or whether upstream geometry/freeform-layout recognition simply failed to recognize a real repeating pattern here (worth checking directly against the raw Figma node before assuming either) — Part 6.5's "detection-order collision" risk is a plausible second contributor, not investigated further here per this document's own "no implementation" scope for this pass.
+2. `width:1646px` as a hard, non-fluid pixel value — per 9.0/9.1's `css-declarations.js:583-588` row, this is the min-width-from-captured-box mechanism, completely blind to whatever this node's real `layoutSizingHorizontal` says. This is the same root mechanism as the hero-row overflow, on a different node, in a different file — **direct, concrete confirmation that this is one shared architectural gap producing what look like two unrelated bugs**, exactly the pattern this whole research effort exists to find instead of patching each instance separately.
+
+### 9.3 — Legacy renderer comparison
+
+A parallel research pass audited every other absolute-positioning site in the codebase, live or not, including the legacy pre-`ir-experimental` path. Full findings below; the single most important one changes this document's priority roadmap (Part 12.5).
+
+**Everything outside the active renderer's own two files turned out to be either legitimate or dead code.** `compiler/layout/interpret.js`'s own absolute-classification (`isAbsolutePositioning`/`absSelf`/`absChildren`) is correctly gated on Figma's real `layoutPositioning:ABSOLUTE` signal and defaults signal-less nodes to `'unknown'`, never `'absolute'` — no overreach. `compiler/layout/project.js`, `compiler/layout/constraint/{solver,network}.js`, and `compiler/features/extract.js` all contain absolute-positioning logic that is **never actually called by the live pipeline** (`ir-experimental-renderer.js` gets its recognition hints from `compiler/geometry` instead, and calls `interpretGraph` directly — it does not go through `project.js`/`constraint/*` at all). `compiler/emit/render/utility-css.js`'s `RESPONSIVE_STANDARDS_BLOCK`/`DUAL_PATH_STANDARDS_CSS` (badge overlays, centered glyphs, the `.et-path-b__stage` scaled-artboard fallback) is a byte-for-byte port of legacy CSS kept only for potential diff-parity — **nothing imports it**; only the position-free `CSS_RESET_BLOCK` from that file is actually wired into `materialize-html.js`. `compiler/emit/render/materialize-html.js`'s only absolute-related logic is reactive plumbing (establishing `position:relative` on a container that has an absolute child, so that child doesn't anchor against an unrelated ancestor) — not a decision site.
+
+**The genuinely significant finding is the comparison between the two legacy files, `server/figma-generate.js` and `server/figma-build.js`** — because it turns out the CODE THIS PROJECT ALREADY HAS (but doesn't run) is more sophisticated about this exact problem than the code it actually ships today:
+
+- **`server/figma-generate.js`** is absolute-heavy *by explicit, stated design* (its own header: "Auto-layout frames → flexbox; freeform frames → absolute positioning") — any child of a non-Auto-Layout parent unconditionally becomes `position:absolute`, no recovery attempt at all.
+- **`server/figma-build.js`** wraps that absolute baseline in what the audit calls "a large, deliberate anti-absolute-positioning machine": roughly ten named, sequenced recovery passes — `applyFlexColumnFromBoxes` (conservative: only fires when flexing reproduces the *exact same* box positions), `liftArtboardContent`, `demoteAbsoluteFlexStacks` (its own comment: *"Flex/grid containers must not stay absolutely positioned — that is the artboard anti-pattern"*), `inferColumnFlex` (confidence-scored, threshold-gated), `collapseCardShells`, `collapseBannerShells`, `stampFeatureCards`, `inferCardGrids`, `recoverSectionHeaders`, `inferSideBySideRows`, `normalizeSectionShell`, `normalizeSiblingCardChrome` — each converting recognized absolute-positioned content into flex/grid. What survives all of them unrecovered falls to an explicit, named last resort ("Path B" / `server/dual-path.js`): a scaled, absolutely-positioned artboard snapshot, reserved for genuinely unrecognizable freeform content or an explicit pixel-fidelity QA mode — not a silent default.
+
+**This means the "seventh mechanism" this document's own Precedent section worried about (Part 0) may have been an unnecessary rebuild in at least one respect**: `ir-experimental` (mechanism #4) was built because the officially-"Live" IR pipeline had zero sibling-geometry code (Precedent row 5) — true, and its own `compiler/geometry`/`compiler/freeform-layout` clustering is real, working, hard-won logic (Parts throughout this document). But `figma-build.js`'s ten pattern-specific recovery passes are a DIFFERENT, larger body of prior art than what `ir-experimental` reinvented, sitting unused in the same repository. `collapseCardShells`/`collapseBannerShells`/`recoverSectionHeaders`/`normalizeSiblingCardChrome` in particular have no clear analogue in `ir-experimental`'s current pattern coverage (Part 10's taxonomy). Before building any NEW pattern-specific recovery logic, the cheaper move is checking whether `figma-build.js` already solved it — ported, not reinvented (Part 12.5, Phase A3, added below).
+
+---
+
+## PART 10 — Layout Pattern Taxonomy
+
+Part 1 catalogs Figma's *node* types; this catalogs the *composed UI patterns* real designers build with them, since a compiler can be 100% correct about every individual node and still misrender the pattern those nodes form together (a hero section is not just "a frame with a heading and an image" — it is a specific compositional convention). For each: how Figma-native data signals it, what IR should represent it, and which renderer strategy is appropriate. "Current" reflects this codebase's actual behavior, not aspiration.
+
+| Pattern | Figma-native signal | Detection today | Ideal IR / strategy | Current gap |
+|---|---|---|---|---|
+| **Single child / passthrough wrapper** | A FRAME/GROUP with exactly one child and no paint of its own | `hasPaintSignal()` + `isWrapperType` (Part 5's "node fate" row) | Collapse into the child, promote the child's own role | Mostly correct; blind to opacity/rotation/mixed-radius carried by the wrapper itself (Part 5) |
+| **Overlay / stack (z-order composition)** | Multiple children with genuinely overlapping boxes, no Auto Layout | `compiler/geometry`'s `isRealOverlap` gate | `position:relative` container + `position:absolute` children, sized/positioned as fractions of the container where possible | This is the ONE pattern where position:absolute is the *correct*, not last-resort, answer — but per Part 9, even here the absolute children get hard pixel boxes, not percentage-of-container ones, so the overlay breaks if the container itself ever resizes |
+| **Column / Row (Auto Layout)** | `layoutMode: HORIZONTAL/VERTICAL` | Read directly, correctly (Part 4.2.2) | `display:flex` + `flex-direction` | Correct axis/gap/padding; incorrect sizing per Part 9 |
+| **Grid (uniform cards/tiles)** | Either native `layoutMode:'GRID'` OR a plain Auto Layout row that wraps (`layoutWrap:'WRAP'`) OR a freeform repeating cluster with no Auto Layout at all | Native Grid: read directly (task history #38). Wrap-based: `layoutWrap` ingested, never read (Part 5/6.2). Freeform: `compiler/freeform-layout/detect.js`'s clustering | 3 genuinely different Figma authoring patterns converging on the same CSS (`display:grid`/`flex-wrap:wrap`) — today only 2 of the 3 are recognized, and the wrap-based middle case has zero code path despite the field already being ingested |
+| **Hero (large heading + supporting media/text, page-top)** | No dedicated Figma signal — a compositional convention, not a node property. Usually: root-level Auto Layout frame, first child, large font-size TEXT + an IMAGE/FRAME sibling | Not detected as a named pattern at all — rendered as "whatever its Auto Layout/geometry mode resolves to," which is usually correct BY COINCIDENCE since heroes are typically real Auto Layout | No dedicated IR needed if Part 9's sizing fix lands — a hero is just an Auto Layout row/column whose sizing intent (FILL) is finally honored | Confirmed live: today's `section-section-light` hero row bug is exactly this — not a "hero pattern" bug, a general sizing-intent bug that happens to be visible here |
+| **Navbar / sidebar** | A frame pinned to one edge (`constraints: {vertical: TOP, horizontal: LEFT_RIGHT}` for a navbar, `{horizontal: LEFT, vertical: TOP_BOTTOM}` for a sidebar) — a REAL, ingested Figma concept (`node.attributes.constraints`, Part 5) | `constraints` is ingested but only ever read by the legacy `sizingAxis()` FALLBACK path (interpret.js:78-85), never for actual pinning/sticky behavior | `position:sticky` (navbar) or full-height flex sibling (sidebar), derived from `constraints`, not from raw x/y | No code path turns `constraints` into `position:sticky`/`position:fixed` anywhere — a navbar that should stick on scroll renders as an ordinary static block today |
+| **Card (repeating, uniform)** | Multiple structurally-identical, spatially-clustered subtrees | `compiler/rulepack/packs/component-detect`'s row-set detection + `compiler/freeform-layout/detect.js`'s clustering — TWO independent, overlapping mechanisms (Part 4.2.3's duplication finding) | Should converge on one clustering primitive (Part 3's Skeleton proposal) | Both mechanisms currently coexist; Part 7.5.3 already flags this |
+| **Dashboard (mixed-size widget grid)** | Real Auto Layout GRID with heterogeneous per-cell spans (`gridRowSpan`/`gridColumnSpan` > 1) | Native fields ARE ingested (Part 4.1.3) and ARE read for grid placement (`ir-experimental-renderer.js:934-939`) | Already correctly handled when Figma declares real Grid Auto Layout | Only fails if the source file used a freeform (non-Grid-mode) canvas to fake a dashboard layout — falls back to the freeform clustering path, unverified against a real multi-span freeform dashboard fixture |
+| **Timeline (alternating left/right items along an axis)** | No dedicated Figma signal — usually an Auto Layout column of alternating-aligned rows, or absolute-positioned items along a connector LINE/VECTOR | Not a recognized pattern; renders as whatever the alternating rows' own individual modes resolve to | No dedicated IR needed beyond correct per-row alignment (Part 9's `justify-content`/`align-items` gap directly affects this: alternating left/right alignment IS `primaryAxisAlignItems`, which is never read, per Part 8's Flexbox row) | Same root cause as the hero/alignment gaps — not a distinct pattern problem |
+| **Pricing card / feature-comparison table** | Real `TABLE`/`TABLE_CELL` nodes (rare) OR (far more common in practice) a repeating-card pattern identical to "Card" above | `TABLE`/`TABLE_CELL`: zero code path (Part 6.1). Repeating-card version: same as "Card" row | An entire heuristic subsystem (`rowSet` detection) exists specifically to GUESS this structure from geometry when Figma doesn't declare a real `TABLE` — and there is still no check for whether Figma already declared one directly (Part 6.1, unchanged since 2026-07-29) |
+| **Carousel / horizontal scroll** | `overflowDirection`/`clipsContent` + `layoutMode:HORIZONTAL` on a frame narrower than its content's summed width | `overflow` hint exists (`overflowHint()`, interpret.js:42-56) and DOES distinguish `scroll` from `clip` | `overflow-x:auto`/`scroll` + `scroll-snap-type` on the container | `overflowHint()`'s `'scroll'` value is computed but — like `interp.sizing` — needs to be confirmed as actually reaching a CSS `overflow-x` declaration in `ir-experimental-renderer.js`; not verified in this pass (candidate for the same "computed, never wired" bug class as Part 9.0, worth checking before assuming it works) |
+| **Masonry (variable-height tiled columns)** | No native Figma layout mode maps to CSS masonry (CSS itself only has masonry via `grid-template-rows:masonry`, not yet broadly supported) — in Figma this is almost always hand-placed absolute/freeform | Falls to the general freeform-clustering path | Freeform clustering into per-column Y-bands is architecturally the right approach (this is exactly what `compiler/freeform-layout/detect.js` already does for repeating cards) — no new IR needed, just correct application | Not distinguished from ordinary repeating-card grids; likely works by coincidence when column heights happen to be uniform, unverified for genuinely variable-height masonry |
+| **Floating elements (badges, tooltips, decorative shapes pinned to a corner)** | A small child whose box sits at/near a corner of a larger sibling, often with `constraints` pinning it to that corner regardless of the parent's own resize behavior | Falls to the general absolute-positioning fallback (Part 9.1's first row) | This is a genuinely correct use of absolute positioning (Part 9.1 agrees) — the fix needed is percentage/anchor-based offsets derived from `constraints`, not pixel offsets, so the badge stays pinned to its corner if the parent ever resizes | `constraints` unused for this purpose (same gap as navbar/sidebar) |
+| **Mixed Auto Layout + absolute-override child** (`layoutPositioning:ABSOLUTE`) | A child of a real Auto Layout parent explicitly opted OUT of the flow | Read correctly at `interpret.js:14-18`, and is the one case Part 9.1 confirms is legitimate | `position:absolute` relative to the flex/grid parent (a real, supported CSS combination — flex/grid containers are valid positioning contexts) | Confirmed correct when it fires; **zero real occurrences observed in this project's fixture corpus to date** (Part 5) — untested on a real file, not proven broken |
+
+**The pattern that recurs across this table**: of the ~14 rows, at least 6 (Hero, Timeline, Overlay, Navbar/Sidebar pinning, Floating elements, Dashboard-via-freeform) don't need a NEW pattern-specific mechanism at all — they need Part 9's sizing-intent fix and a `constraints`-to-CSS-anchoring translation. Only 2 rows (Grid-via-wrap, native `TABLE`) represent a genuinely unhandled Figma signal with no existing partial mechanism.
+
+---
+
+## PART 11 — Responsive Strategy
+
+The user's own framing: *"Our compiler currently generates left, top, fixed width, fixed height. This is unacceptable."* This part proposes when each CSS layout mechanism should be chosen, and reconciles that against what `compiler/responsive/*` already does (Part 8's Responsive row: a real breakpoint/strategy IR exists and does reach literal `@media` CSS — this is NOT starting from zero).
+
+### 11.1 — Decision order (proposed)
+
+For each node, in this priority order — matching the "Figma's declared data beats geometry-guessing" rule Part 7.5.4 already establishes as intended-but-unenforced:
+
+1. **`layoutPositioning:ABSOLUTE`** → `position:absolute` relative to its real Auto Layout parent (Part 10's "Mixed" row). Rare, legitimate, already correctly read.
+2. **Real Auto Layout (`layoutMode`) present** → `display:flex`, direction from `layoutMode`, **and** sizing per node from `layoutSizingHorizontal/Vertical` (Part 9.0): `FILL`→`flex:1 1 0`/`width:100%` as axis-appropriate, `HUG`→no explicit size (content-driven, CSS's own default), `FIXED`→the current hard/min-pixel behavior, unchanged. This ONE change is what turns the hero row and `Group 357`'s wrapper from non-fluid to fluid.
+3. **Real Grid Auto Layout (`layoutMode:'GRID'`)** → `display:grid`, already correctly wired (task history #38).
+4. **No Auto Layout, but `constraints` present** (Part 10's Navbar/Sidebar/Floating rows) → derive `position:sticky`/`position:fixed`/percentage-anchored offsets from `constraints`, instead of raw pixel `left`/`top`. Currently `constraints` is read only as a `sizingAxis()` fallback (interpret.js:78-85) — never for its own actual purpose.
+5. **Real geometric overlap between siblings, no Auto Layout at all** (Part 10's Overlay row) → `position:relative` container + `position:absolute` children, but with offsets expressed as `%` of the container's own box (computable today: `(child.x - parent.x) / parent.width * 100`) rather than raw pixels, so the composition scales instead of only being correct at exactly one canvas width.
+6. **No Auto Layout, no constraints, no overlap** (genuinely freeform, single item or simple list) → normal block flow; this is the case existing `orderChildrenVisualY`/Skeleton reading-order work already targets correctly (Part 4.2.5).
+7. **Last resort**: raw pixel `position:absolute;left;top;width;height` exactly as today, for whatever doesn't match 1–6. Per Part 9's audit, this should become a small residual, not (as it effectively is today, since dimensions in flex/grid children ALSO end up as hard pixels via `min-width`) the de facto universal fallback regardless of which of the 6 cases above actually applies.
+
+### 11.2 — When to generate which CSS mechanism
+
+| Situation | Generate | Not | Why |
+|---|---|---|---|
+| Node has `layoutSizingHorizontal:'FILL'` inside a flex row | `flex:1 1 0` or `width:100%` (axis-dependent) | `min-width:<captured px>` | Matches Figma's own explicit "grow to fill" intent; today's behavior instead floors it at whatever width it happened to have at ONE canvas size |
+| Node has `layoutSizingHorizontal:'HUG'` | No explicit width (let flex/content size it); `flex:0 0 auto` if inside a row that also has FILL siblings, so it doesn't get stretched | any hard width or min-width | "Hug" is Figma's own "size to content" — imposing any captured pixel value overrides the one case where CSS's natural behavior already matches Figma's intent for free |
+| Node has `layoutSizingHorizontal:'FIXED'` (or the field is absent — legacy/plugin-sourced file) | Today's `min-width:<captured px>` behavior | — | This is the one case where today's behavior is already correct; the fix is additive (branch on the other two values), not a wholesale replacement |
+| Real `constraints` pin one edge, opposite edges scale (`LEFT_RIGHT`/`TOP_BOTTOM`) | Percentage-based inset (`left:Npx; right:Npx`) instead of a fixed `width` | Fixed pixel width | This is Figma's own explicit "this element should stretch when its parent resizes" signal — currently indistinguishable in output from a node that should NOT stretch |
+| Genuine z-order overlay, no Auto Layout | `position:absolute` with `%`-based offsets (11.1 case 5) | Pixel offsets | Keeps the composition correct across viewport widths without needing a new breakpoint entry per overlay |
+| A breakpoint/strategy adaptation already computed by `compiler/responsive/detect.js` | Literal `@media` block (already wired, Phase 4) | — | Already correct; not a gap |
+| Aspect-ratio-locked media (an image/video whose Figma `scaleMode` implies a fixed ratio) | CSS `aspect-ratio: W / H` + fluid width, rather than hard pixel width AND height | Hard px width + height (today's `hardImageSize` behavior) | `aspect-ratio` lets the image scale fluidly with its container while preserving proportion — today's hard-both-dimensions approach (added to fix the "avatar renders at native pixel size" bug, Part 9.1) solved one bug by introducing exactly the "no fluid relationship to parent" problem this Part exists to close |
+
+### 11.3 — Container queries / intrinsic sizing
+
+Figma has no design-time concept of "how this component should look at different CONTAINER widths independent of viewport width" — Auto Layout's HUG/FILL/FIXED is the closest analogue, and it is a per-node property, not a per-container query. **Container queries are therefore not a translation target for anything in Figma's own data model** — they would only become relevant if this compiler ever synthesized genuinely responsive COMPONENT variants (e.g., a card that lays out differently below 300px of available width) from multiple Figma breakpoint frames of the same component, which is a design-process convention some teams use but nothing in this codebase's ingest currently correlates across frames to detect. Out of scope until that correlation exists; not a near-term gap.
+
+---
+
+## PART 12 — Root Cause Report, Architecture Diagrams, and Roadmap
+
+### 12.0 — Why an 8th new file still breaks (direct answer)
+
+Restating the question precisely: *if this diagnosis ("compiler guesses instead of reading Figma's declared intent") was already correctly made 6 times before 2026-07-29, and a 7th time in Part 1–7 of this same document, why did a NEW file (`Group 357`, 2026-07-31) still break, in the same category, 2 days later?*
+
+The direct answer, now provable rather than asserted: **because the specific, cheapest, most-flagged fix this document's own Part 7.4.1 named as the "cheapest possible fix-to-impact ratio in this entire document" was implemented at the wrong pipeline stage.** `sizingAxis()` was fixed (task history #13) — a real, correct, tested change. But the fix landed in `compiler/layout/interpret.js`, which is one stage upstream of `compiler/artifacts/ir-experimental-renderer.js` — the file that actually decides what CSS gets written — and nothing ever connected the two (Part 9.0). Every fix made in the 2026-07-29 to 2026-07-31 window (root padding, section gap, gradient text, object-fit, box-shadow, text-wrap, row-banding, absolute-gate, cross-inset) was real, correctly root-caused, and correctly verified — and every one of them was a DIFFERENT downstream symptom of this SAME upstream wiring gap, because none of them were "is this node supposed to be fluid," they were all "given that this node is NOT fluid, is its one hardcoded pixel number at least the RIGHT hardcoded pixel number." Seven sessions found the right diagnosis. This session found the specific reason the diagnosis kept re-manifesting as a new bug instead of resolving: **a correct fix was made in isolation from the one consumer that needed it, and nothing in this pipeline's architecture would have caught that gap** (Part 7.5.9's "no property-level safety net" finding, restated: this is exactly the kind of gap only a fixture test asserting the FINAL CSS output — not the intermediate IR — would have caught).
+
+### 12.1 — Current architecture (as it actually runs today, verified by direct source inspection this session and Part 4.3 of this document)
+
+```
+Raw Figma JSON
+      │
+      ▼
+NDG ingest (compiler/ndg/ingest.js) ── correctly captures layoutSizingHorizontal/
+      │                                 Vertical, primaryAxisAlignItems, constraints,
+      │                                 isMask, effects, etc. (Part 4.1.3, Part 9.0)
+      ▼
+layout/interpret.js's interpretGraph() ── computes interp.sizing = {fill|hug|fixed}
+      │                                    CORRECTLY (fixed 2026-07-2x) ─┐
+      ▼                                                                  │
+compiler/geometry/* + compiler/freeform-layout/* + rulepack/component-detect  │
+  (THREE independent clustering mechanisms, Part 7.5.3)                  │
+      │                                                                  │
+      ▼                                                                  │
+ir-experimental-renderer.js's buildRenderNode() ── re-materializes NDG   │
+  directly (Part 7.5.8's confirmed contract violation), reads            │
+  interp.padding + interp.gap from the SAME interp object ───────────────┘
+  but never interp.sizing (Part 9.0) — THIS is the break in the chain.
+  Falls back to raw effectiveBox.width/height as a hard pixel value for
+  EVERY node regardless of its real sizing intent.
+      │
+      ▼
+css-declarations.js's modeDecls() ── emits min-width/width from that
+  hard pixel value unconditionally (Part 9.1's table)
+      │
+      ▼
+HTML/CSS output ── correct at the ONE canvas width Figma captured,
+  non-fluid at any other width or in any wrapper narrower than the design
+```
+
+### 12.2 — Ideal architecture (extends, does not replace, Part 7.6's proposal)
+
+```
+Raw Figma JSON
+      │
+      ▼
+NDG ingest ── unchanged, already broad enough (Part 4.1.3)
+      │
+      ▼
+Design Skeleton (Part 3) ── role classification, ONE clustering pass,
+  reading-order — retiring the 3 duplicate mechanisms (7.5.3) into it
+      │
+      ▼
+Sizing/Positioning Resolution (NEW — the missing layer this Part identifies) ──
+  consumes interp.sizing + constraints + Skeleton role, and for EVERY node
+  decides, ONCE: fluid (fill/constraints-stretch) vs. content-sized (hug) vs.
+  fixed (Part 11.1's 7-case decision order) — producing a resolved sizing
+  strategy per node, not a raw pixel number
+      │
+      ▼
+LayoutIR / ComponentIR / ResponsiveIR (existing IR stages, Part 7.6,
+  now consuming a real sizing strategy instead of nothing)
+      │
+      ▼
+EmitPlan → RenderNode → CSS ── emits flex:1/width:100%/aspect-ratio/
+  position:sticky/%-anchored-absolute per Part 11.2's table, falling back
+  to a hard pixel value ONLY for genuinely FIXED-sized nodes (11.1 case 7,
+  now a true last resort, not the de facto default)
+```
+
+**The one addition this Part makes to Part 7.6's already-proposed pipeline**: a named "Sizing/Positioning Resolution" layer between the Skeleton and the existing IR stages. Part 7.6 already correctly identified that the Skeleton should own role/clustering; this Part's contribution is naming the SEPARATE, currently-nonexistent layer whose entire job is "decide fluid vs. fixed, once, before any IR or renderer touches a dimension" — because Part 9.0 proves that without a dedicated, explicitly-consumed layer for this one question, a correct upstream computation (`interp.sizing`) can exist for weeks across multiple "fixed" sessions without ever being read.
+
+### 12.3 — Missing layers (this pass's contribution to Part 7.4)
+
+1. **Sizing/Positioning Resolution** (12.2) — the layer whose absence this whole Part is about.
+2. **A `constraints`-to-CSS-anchoring translator** (Part 10/11's Navbar/Sidebar/Floating/Overlay rows) — `constraints` is ingested and even read (Part 4.1.3), but only ever as a fallback for a DIFFERENT question (`sizingAxis()`'s legacy branch); nothing translates a pinned edge into `position:sticky` or a percentage anchor.
+3. **A percentage-offset overlay renderer** (Part 11.1 case 5) — today's overlay/z-order handling is directionally correct (position:relative + absolute children) but the offsets are raw pixels, making the one pattern where absolute positioning IS the right answer still non-fluid.
+4. Every "Missing Layers" item Part 7.4 already named (Skeleton, Component/Instance value-consumption, the Plugin-API translation layer, property-level validation) — unchanged, not superseded by this pass.
+
+### 12.4 — Explicit mapping to the 10 requested deliverables
+
+| # | Deliverable | Where in this document |
+|---|---|---|
+| 1 | Current Architecture Diagram | Part 12.1 (new) |
+| 2 | Ideal Architecture Diagram | Part 7.6 (pipeline shape) + Part 12.2 (the added Sizing/Positioning Resolution layer) |
+| 3 | Missing Layers | Part 7.4 (original 7) + Part 12.3 (this pass's addition) |
+| 4 | Information Loss Matrix | Part 5 (property-level, ~50 rows) |
+| 5 | Figma Property Coverage | Part 1 (taxonomy) + Part 5 (matrix) + Part 8 (per-CSS-category ceiling) |
+| 6 | CSS Coverage | Part 8 (Figma Ceiling / Current per category, all 15 major CSS areas) |
+| 7 | Responsive Coverage | Part 8's Responsive row + Part 11 (full strategy + decision table) |
+| 8 | Layout Pattern Coverage | Part 10 (14-pattern taxonomy) |
+| 9 | Absolute Position Coverage | Part 9 (every active-renderer emission site, judged) |
+| 10 | Priority Roadmap | Part 12.5 (below), superseding Part 7.7's ordering |
+
+### 12.5 — Updated priority roadmap
+
+Part 7.7's phases (A–E) are not wrong, but this pass's finding changes what belongs in Phase A, because it identifies a fix that is (a) cheaper than anything in the original Phase A, (b) directly closes two live, user-reported bugs, and (c) requires zero new architecture — only wiring an existing, already-correct value to its intended consumer.
+
+- **Phase A0 (NEW, precedes original Phase A) — Wire `interp.sizing` into `ir-experimental-renderer.js`.** Per Part 9.0/9.1: read `interp.sizing.horizontal`/`.vertical` at the two sites in `ir-experimental-renderer.js` that currently set `layoutChoice.width`/`height` from a raw captured box (lines ~1094, ~1123-1128, ~1141), and branch in `css-declarations.js`'s `modeDecls()` (~583-588) per Part 11.2's table (fill → flex/percent, hug → unset, fixed → today's behavior unchanged). Proof-of-done: the hero-row overflow and a synthetic `Group-357`-shaped fixture (real Auto Layout parent, FILL child, narrower-than-design-canvas viewport) both resolve fluidly; full existing test suite stays clean (this is an additive branch, not a replacement of the fixed-case behavior, so no existing fixture should change unless its source data has real FILL/HUG sizing this test suite doesn't yet exercise).
+- **Phase A1 (NEW) — `constraints`-to-anchoring translator** (12.3.2), scoped narrowly to the pin-one-edge / stretch-opposite-edges case (Navbar/Sidebar/Floating patterns), before attempting `position:sticky` detection more broadly.
+- **Phase A2 (NEW) — Percentage-based overlay offsets** (12.3.3), a small, isolated change to the existing overlay/z-order path.
+- **Phase A3 (NEW) — Prior-art salvage pass, before writing any new pattern recognizer.** Per Part 9.3's legacy-comparison finding: `server/figma-build.js` already contains ~10 working, named recovery passes (`collapseCardShells`, `collapseBannerShells`, `recoverSectionHeaders`, `inferCardGrids`, `inferSideBySideRows`, `normalizeSiblingCardChrome`, etc.) that `ir-experimental` never inherited. Before implementing any new entry in Part 10's Layout Pattern Taxonomy, check whether `figma-build.js` already solves it and port the logic, rather than re-deriving it from scratch the way `compiler/geometry`/`compiler/freeform-layout` currently do in parallel for a narrower set of patterns. Proof-of-done: a side-by-side comparison (same real fixture, both code paths) for at least the 3 highest-overlap patterns (Card, Dashboard, Hero) before any is reimplemented.
+- **Phases A–E from Part 7.7** — unchanged, now Phases B0–F, still gated on Phase B's (renamed) property-level fixture safety net, which remains the correct prerequisite for every phase after A0–A3 for exactly the reason 12.0 just proved: a correct fix with no consumer-side test is indistinguishable, from the outside, from no fix at all.
+
+This roadmap is deliberately still gated on proof-of-done fixture tests per phase, not a status update — the same discipline Part 7.7 already committed to, now with one additional teeth: at least one proof-of-done test per phase must assert against the FINAL emitted CSS/HTML, not an intermediate IR value, since 12.0's entire finding is that an intermediate value being correct proved nothing about the final output.
+
+---
+
+## PART 13 — Compiler-Theoretic Reframing: Figma as a Source Language
+
+Parts 1–12 diagnosed this project's problems in *this project's own* vocabulary (NDG, LayoutIR, Skeleton). This part asks a different question: if this is genuinely a **compiler** — Figma as source language, browser rendering as target machine — what does 70+ years of compiler-construction practice say about the shape it should have, and does that framing predict failures this document hasn't found yet?
+
+### 13.0 — Why this reframe is legitimate, and precisely where it stops being one
+
+The analogy is not decorative. A compiler is, structurally, any system that (a) parses a structured input into a representation that makes its MEANING explicit rather than just its shape, (b) verifies and normalizes that meaning through one or more intermediate forms, and (c) lowers the verified meaning to a different, lower-level target representation whose own execution semantics the source format doesn't share. That is exactly what "Figma JSON → CSS/HTML" is: two representations that share no execution model (a design tool's z-ordered, arbitrarily-nested canvas vs. a browser's box-model-and-flow rendering engine), bridged by exactly the kind of "does this source construct mean flex, grid, or absolute" decision a real compiler makes about "does this source construct mean a jump, a call, or a phi node."
+
+Where the analogy has a real, honestly-stated limit: a programming language's grammar is **unambiguous by construction** — a parser either accepts a token stream or rejects it, and if it accepts, there is exactly one meaning. A Figma canvas has no such guarantee — Part 2 of this document ("Design Intent") already established that two designers can produce visually identical output from structurally different trees, and Figma itself enforces no rule that a "card" must be built one specific way. This means the "front end" of this compiler will **always** retain a genuine inference/heuristic component that a real language parser does not need — geometry-guessing cannot be fully eliminated, only correctly *subordinated* to declared intent when declared intent exists (Part 11.1's decision order already does this; this section explains why that specific ordering — not "always infer" or "never infer" — is the theoretically correct answer). Similarly, "verification" here can never be as absolute as LLVM's IR verifier, because there is no single formally-specified "correct" pixel output the way there is a formally-specified x86 instruction encoding — CSS rendering itself has browser-to-browser variance. Verification in this domain is necessarily closer to a **linter with strong invariants** than a **proof-checker**, and 13.4 below is scoped accordingly.
+
+### 13.1 — The canonical pipeline, and where this project's actual code sits on it today
+
+A generic compiler: `Source text → Lexer → Token stream → Parser → AST → Semantic analysis (binding + type-checking) → attributed/typed AST or a separate typed IR (HIR) → mid-level IR (MIR, usually a CFG in SSA form) → optimization passes (IR→IR) → verification → instruction selection / codegen → target machine code`.
+
+| Compiler stage | This project's stated equivalent | What actually exists today |
+|---|---|---|
+| Source text | Raw Figma REST/Plugin JSON | Exists, two dialects (Part 1.13) |
+| Lexer / token stream | — | No equivalent needed; JSON is already tokenized by its own grammar |
+| Parser → AST | `compiler/ndg` (NDG) | **This is where the mapping already breaks.** NDG (Part 4.1) is lossless field-capture — closer to a **concrete syntax tree (CST)**, which preserves every literal token including ones with no semantic weight, than an AST, which is supposed to discard syntax and keep only meaning. Nothing in this pipeline currently plays the AST's actual role: grouping raw nodes into semantically meaningful units (*this is a card*, *this is decorative chrome*, *this is a real container*) BEFORE any layout decision. Part 3's proposed Skeleton is the correct fix — in this framing, **the Skeleton is not a nice-to-have, it is the missing parser output**. A pipeline that goes from a CST straight to codegen is, in compiler terms, a pipeline with no parser — it is structurally unsurprising that it produces inconsistent results, the same way a "compiler" that pattern-matches machine code directly out of a raw token stream would. |
+| Semantic analysis (binding + type-checking) | — (does not exist as a distinct stage) | This is Part 12.2's proposed "Sizing/Positioning Resolution" layer, and Part 9.0's finding is precisely a **semantic-analysis-stage bug**: `interp.sizing` is a correctly-computed TYPE JUDGMENT (fill/hug/fixed is exactly as meaningful, structurally, as inferring a variable's static type) that never got attached to anything downstream — the equivalent of a type-checker that runs, produces a correct answer, and then the code generator ignores the symbol table entirely and re-derives types from raw syntax. In compiler terms this specific bug class has a name: **codegen bypassing the checker**, and it is a well-known category of miscompilation bug (seen historically in exactly this shape in several real compilers when an AST-to-bytecode lowering pass was written before a later type-checker pass, and nothing enforced that codegen could only run after checking populated the fact table it depends on). |
+| HIR / typed AST | — | No equivalent; see above — this is the same missing stage as "semantic analysis," since this pipeline currently has no typed intermediate form of a node at all, only raw + heuristically-detected facts bolted on as side maps (`cardByNodeId`, `freeformMemberFact`, etc. — Part 4.2.3's "duplicated tolerance constants, no shared source of truth" finding is precisely what happens when a compiler has no canonical typed-AST slot to put a fact once and have every later pass trust it). |
+| MIR (CFG, SSA) | LayoutIR / ComponentIR / ResponsiveIR | These exist and ARE real, structured intermediate forms (Part 7.6 already treats them as reusable) — but Part 7.5.8 confirms the ACTIVE renderer doesn't consume them; it recomputes everything from NDG directly. In compiler terms: **a real MIR exists, and the actual code generator doesn't lower from it — it re-runs its own ad hoc front end and skips straight to codegen.** This is architecturally equivalent to an LLVM backend that ignores the LLVM IR it was handed and re-parses the original C source itself. |
+| Optimization passes (IR→IR, composable, single-purpose) | Scattered special cases inside `buildRenderNode()` | `ir-experimental-renderer.js`'s `buildRenderNode` is roughly 1,400 lines doing parsing-equivalent work (grouping), checking-equivalent work (sizing/role decisions), optimizing-equivalent work (wrapper collapse, cross-inset correction), AND codegen-adjacent work (assembling `layoutChoice`) — all in one function, one pass, one undifferentiated stage. Real compilers deliberately split these into small, single-purpose, independently-testable passes over a STABLE IR specifically because a monolithic pass makes it impossible to unit-test "does sizing resolution work" independent of "does wrapper collapse work" — which is exactly why this document's own fixes this session had to be verified via full end-to-end fixture regeneration every time (Part 4/12's discipline), rather than a narrow, fast unit test on one pass's output, the way a real compiler's `-passes=mem2reg` can be tested in complete isolation from every other pass. |
+| Verification (between passes, before codegen) | — (does not exist) | Confirmed absent, Part 7.5.9/12.0. See 13.4 — this is the one genuinely NEW mechanism this reframing proposes. |
+| Instruction selection / codegen | `css-declarations.js`'s `modeDecls()` et al. | Structurally the right SHAPE (a decl-emission function per IR construct) but, per Part 9's audit, currently making real SEMANTIC decisions at this stage (hardcoded `align-items`, unconditional `min-width` regardless of sizing intent) that a real backend would never make — instruction selection chooses HOW to implement an already-fully-decided IR operation, it does not decide WHAT the program means. Every case in Part 9.1's table where codegen is filling in a decision the front end should have already made (because the front end computed it and didn't pass it along, per 13.1's HIR/MIR row) is, in compiler terms, a **layering violation**. |
+| Target machine code | CSS + HTML | The browser's rendering engine is the literal "target machine" — its layout algorithms (block/inline/flex/grid formatting contexts) are the "instruction set," and just as a real ISA has instructions that are cheap/native (flex, grid, block flow) vs. ones that exist but should be reserved for cases nothing else fits (absolute positioning — Part 9's "last resort, not default" finding, restated: **absolute positioning is this target's equivalent of hand-written inline assembly** — sometimes the only correct tool, never the default code path a well-behaved compiler reaches for first). |
+
+### 13.2 — Lessons from each named compiler, and the one concrete principle each contributes
+
+Generic descriptions of these compilers are widely available; the value here is naming the ONE actionable principle each contributes to this specific project, not summarizing their whole architecture.
+
+- **LLVM.** Principle: *one stable IR, many frontends, many backends, and a mandatory verifier between passes.* LLVM IR's entire value proposition is that Clang, Rust, Swift can all target it, and any of LLVM's ~100 optimization passes can run on IR from any of them, because every pass trusts the SAME IR shape and the verifier guarantees that shape's invariants hold before the next pass runs. This project's three duplicate clustering mechanisms (Part 7.5.3) are the direct violation of this principle — they are effectively three different "IRs" for the same design-graph concept, none of which the other two passes can consume, forcing every new heuristic to be re-implemented three times or drift out of sync. **Action for this project: one canonical Skeleton/MIR shape, one verifier, retire the duplicates (Part 3/7.6, unchanged) — LLVM is the strongest existing proof this specific consolidation is the industry-standard answer to this exact symptom, not a novel or risky proposal.**
+- **Swift compiler (SIL).** Principle: *a mid-level IR can exist specifically to preserve source-language semantics that the FINAL target IR would discard too early.* Swift doesn't lower straight from its typed AST to LLVM IR — it introduces SIL specifically because LLVM IR has already forgotten concepts like "this is a protocol witness table" by the time optimizations run on it, and some Swift-specific optimizations (and ALL of Swift's diagnostics — definite-initialization checking, etc.) need that semantic information intact. This maps directly onto why "just emit CSS a bit smarter" is the wrong framing: this project needs a mid-level representation that still knows "this was Figma's `FILL` sizing intent" and "this was a real Auto Layout container" — concepts CSS itself has no name for — resolved and preserved through the pipeline, not re-derived from geometry at the last second the way `ir-experimental-renderer.js` currently does. **The proposed "Sizing/Positioning Resolution" layer (Part 12.2) is, precisely, this project's SIL — a mid-level IR that exists ONLY to keep Figma-specific semantic facts alive long enough for codegen to use them.**
+- **TypeScript compiler.** Principle: *separate BINDING (name/scope resolution) from CHECKING (semantic/type analysis) from EMITTING (a composable pipeline of small AST-to-AST transformer passes), and prefer declared types over inference whenever a declaration exists.* The Binder/Checker split is why TypeScript can type-check incrementally and why "what does this identifier refer to" is answered exactly once, in one place, for the whole program. This project currently answers "what is this node's role/sizing" independently, differently, in up to three places per Part 7.5.3 — the Binder/Checker split's lesson is that this should be answered once, attached to the node, and treated as authoritative everywhere after. TypeScript's emit pipeline (a linear sequence of small, composable `Transformer` functions, each doing ONE downlevel transform) is also a good literal template for what Part 12.2's proposed "MIR → CSS" stage should look like structurally, rather than the current monolithic `buildRenderNode`.
+- **Rust (HIR/THIR/MIR).** Principle: *whole-program dataflow analysis (borrow-checking) is deliberately performed on a control-flow-graph-shaped MIR, not on the AST, because CFG form is what makes dataflow analysis tractable — and it is done in exactly ONE place, on exactly ONE canonical MIR, never per-frontend-construct.* This project's row-banding/overlap/side-by-side detection (Part 4.2.3, Part 7.5.3) are ALL, precisely, dataflow analyses over sibling geometry (a fact about node N depends on facts about its siblings, propagated through a graph) — currently implemented as three separate ad hoc tree-walks rather than one canonical graph representation with one shared analysis. **Rust is the strongest available proof that "dataflow analysis needs a graph-shaped canonical IR, not three independent tree-walks" is correct, load-bearing compiler-design practice, not an abstraction for its own sake.**
+- **Babel.** Principle (a genuine, useful COUNTEREXAMPLE): *a single-AST, visitor-pattern transform pipeline is the RIGHT architecture specifically when source and target are the same language at roughly the same abstraction level (JS-to-JS).* Babel has no separate mid-level IR because it doesn't need one — down-leveling `const` to `var` doesn't require forgetting-then-reconstructing semantic information the way crossing from "Figma's Auto Layout" to "CSS flexbox" does. **The lesson is a warning, not a template: `ir-experimental-renderer.js`'s current single-monolithic-pass shape is architecturally appropriate for a Babel-style same-level transform — and this project is not one. Its problems are symptomatic of using a Babel-shaped architecture for a Swift/Rust-shaped problem (crossing a real semantic-domain boundary), not a coincidence.**
+- **ESBuild / SWC.** Principle: *when a transform pipeline IS Babel-shaped (homogeneous, same-level), reimplementing it in a systems language for raw throughput is a legitimate, well-proven strategy — but it inherits Babel's own architectural ceiling, it does not raise it.* Neither tool introduces new IR layers versus Babel; both are evidence that "more IR stages" is a correctness/semantic-preservation tool, not a performance one, and that performance work belongs AFTER the correctness architecture is right, not instead of it. Relevant caution for this project: any future "let's just make the renderer faster" effort should not be mistaken for solving the problems this document identifies — ESBuild is proof that raw speed and semantic correctness are orthogonal axes.
+- **Clang.** Principle: *keep the AST maximally source-faithful (preserving even things codegen doesn't need, like exact macro expansions and comments) specifically because MULTIPLE DIFFERENT CONSUMERS beyond the compiler proper — clangd, static analyzers, refactoring tools — need to work from the same tree.* This project already has, or will soon want, multiple consumers of its own canonical design representation beyond the renderer: an accessibility auditor, a design-QA/pixel-diff tool, a future second renderer (e.g. React-component output instead of static HTML) — all of which Part 3's Skeleton proposal should serve equally, not just `ir-experimental-renderer.js`. **Action: design the Skeleton's shape around "what would a design-linter or a React-codegen consumer need from this tree," not narrowly around what today's one CSS renderer happens to read** — Clang's own history (its AST long outlived any single consumer it was originally built for) is direct evidence this pays off.
+
+### 13.3 — The redesigned pipeline, in compiler terms (supersedes Part 12.2's diagram with proper stage names; does not change its actual content)
+
+```
+Figma REST/Plugin JSON             (SOURCE TEXT — Figma is the source language)
+        │
+        ▼
+NDG                                (CONCRETE SYNTAX TREE — lossless, syntax-faithful,
+        │                           unchanged from Part 4/7.6's proposal)
+        ▼
+Design Skeleton                    (AST — the missing parser output: groups raw
+        │                           syntax into meaningful units — card, hero,
+        │                           decorative chrome, real container — Part 3)
+        ▼
+Sizing/Positioning + Role          (SEMANTIC ANALYSIS / TYPE-CHECKING — resolves
+  Resolution (Part 12.2)            fill/hug/fixed, alignment, anchor behavior,
+        │                           EXACTLY ONCE, attached to each Skeleton node
+        │                           as an authoritative fact — this is where
+        │                           Part 9.0's dead `interp.sizing` finally gets
+        │                           consumed, by construction, because there is
+        │                           now exactly one place downstream allowed to
+        │                           ask "what size should this be")
+        ▼
+LayoutIR / ComponentIR /           (MID-LEVEL IR — Swift SIL's role: a form that
+  ResponsiveIR (Part 7.6)           still knows Figma-specific semantic facts,
+        │                           now ACTUALLY consumed by codegen, closing
+        │                           Part 7.5.8's confirmed contract violation)
+        ▼
+verifyIR()  (NEW — Part 13.4)      (VERIFICATION — LLVM-verifier-equivalent;
+        │                           runs once, mechanically, before codegen;
+        │                           see 13.4 for the actual invariant list)
+        ▼
+EmitPlan → modeDecls() et al.      (INSTRUCTION SELECTION / CODEGEN — a
+        │                           table-driven lowering from fully-resolved
+        │                           IR facts to CSS declarations; makes NO new
+        │                           semantic decisions of its own, per 13.1's
+        │                           "layering violation" finding)
+        ▼
+CSS + HTML                         (TARGET MACHINE CODE — the browser's
+                                    rendering engine is the target machine;
+                                    flex/grid/block are its native instructions,
+                                    absolute positioning is its inline assembly)
+```
+
+### 13.4 — The one genuinely new mechanism: `verifyIR()`
+
+Modeled directly on `llvm::verifyModule()` — a single pass that walks the fully-resolved IR immediately before codegen and asserts a fixed list of invariants, failing loudly (not silently degrading) if any is violated. This is a NEW deliverable, not a restatement of Part 7.5.9's "we need a safety net" — it is a concrete first invariant list, derived directly from bugs this document has already found:
+
+1. **Every node has exactly one resolved sizing strategy** (`fill`/`hug`/`fixed`), never `undefined`/`null` by the time codegen runs — this single invariant, if it had existed, would have caught Part 9.0's dead-`interp.sizing` bug the moment it was introduced, mechanically, rather than requiring a user to notice a rendered overflow on a specific fixture weeks later.
+2. **Every node is a member of at most one repeating-group/card-cluster detector's output** — directly targets Part 7.5.3's confirmed duplication risk (three independent clustering mechanisms with no shared source of truth); a node claimed by two different detectors simultaneously is a real, checkable defect, not a matter of taste.
+3. **A node with `position:absolute` in its resolved IR has a real, non-synthetic positioned ancestor within its Skeleton subtree** — targets the exact failure class `materialize-html.js`'s reactive `hasAbsoluteChild` plumbing (Part 9, background-audit section) exists to paper over; verifying it as an invariant catches the cases that plumbing doesn't.
+4. **No node's resolved `mode` is `'unknown'` inside a Skeleton-classified real-Auto-Layout container** — directly targets the exact bug class fixed in task history #43 (leaf-inside-real-Auto-Layout absolute-positioning bug); as an invariant, it would have failed loudly on the very first fixture that exhibited it, rather than requiring the avatar-overlap screenshot report that actually surfaced it.
+5. **Every effect/paint/stroke field consumed at ingest has a corresponding emission-stage consumer, or is explicitly annotated as intentionally structural-only** — this is the general form of Part 8's entire "ingested but never emitted" bug class (gradient text, object-fit, box-shadow — all fixed this session, all initially found only by a human noticing a rendered discrepancy). A build-time (not runtime) lint pass cross-referencing `ndg/ingest.js`'s field list against every read-site across the renderer would catch the NEXT instance of this exact bug class before it ships, not after a screenshot report.
+
+Consistent with 13.0's honesty section: this is explicitly a linter, not a proof-checker — it cannot prove the OUTPUT is pixel-correct (no such proof is available for CSS the way `verifyModule` can prove IR well-formedness against LLVM's fully-specified grammar), but each invariant above is a mechanically-checkable, zero-false-positive structural fact whose violation has, in this document's own evidence, corresponded 1:1 with a real shipped bug every single time.
+
+### 13.5 — How this changes the roadmap (Part 12.5)
+
+One addition, no reordering: **`verifyIR()`'s first invariant (5-item list above) should be built ALONGSIDE Phase A0 (Part 12.5), not after it.** Per 13.0/13.4's own reasoning: a wiring fix with no verifier is exactly as unprovable, at the architecture level, as the original unwired `interp.sizing` was — this document can assert Phase A0 fixes the hero-row/`Group 357` class of bug for the FIXTURES it was tested against, but per 12.0's own finding (a correct fix in isolation from its consumer went unnoticed for an entire pipeline stage's lifetime), the only way to make that claim for the NEXT file, mechanically rather than by hoping a user reports it, is invariant #1 above running automatically on every future compile.

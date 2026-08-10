@@ -1,0 +1,46 @@
+{
+  "packId": "synthetic.basic",
+  "version": "1.0.0",
+  "suiteVersion": "1.0.0",
+  "description": "Synthetic infrastructure demo pack — not production UI rules",
+  "priority": 10,
+  "allowedPolicies": ["*"],
+  "knowledgeRefs": ["pattern:block.generic", "feature:equalGap"],
+  "dependencies": [],
+  "rules": [
+    {
+      "ruleId": "synthetic.fact-to-hypothesis",
+      "question": "html.tag",
+      "matcherRef": "feature:equalGap",
+      "priorityBand": "P5",
+      "description": "If a source Fact exists, propose a safe-generic div candidate"
+    }
+  ],
+  "plugin": {
+    "id": "rulepack.synthetic.basic",
+    "version": "1.0.0",
+    "engineType": "proposer",
+    "phaseAffinity": "mid",
+    "determinism": "pure",
+    "reads": ["Fact"],
+    "writes": ["Hypothesis", "Evidence"],
+    "creates": ["Hypothesis", "Evidence"],
+    "destroys": [],
+    "consumes": ["Fact", "knowledge:pattern:*"],
+    "produces": ["Hypothesis", "Evidence", "Candidate"],
+    "requiredFacts": [],
+    "optionalFacts": ["source.x"],
+    "emittedIR": [],
+    "acceptedQuestions": ["html.tag"],
+    "allowedPolicies": ["*"],
+    "requiredCapabilities": ["knowledge:read"],
+    "incompatiblePlugins": [],
+    "estimatedCost": 1,
+    "estimatedMemory": 1024,
+    "timeout": 5000,
+    "retries": 0,
+    "crashIsolation": "try_catch",
+    "rollbackSupport": "workspace_tx",
+    "contractSuiteVersion": "1.0.0"
+  }
+}
